@@ -462,7 +462,7 @@ input:checked + .sl2 { background: var(--red); }
 input:checked + .sl2::before { transform: translateX(19px); }
 
 /* ---- CARDS LOTERIA — DADOS AO VIVO ---- */
-.lt-dados-live { min-height: 18px; margin-bottom: 4px; display: flex; flex-direction: column; gap: 2px; }
+.lt-dados-live { min-height: 18px; margin-bottom: 4px; display: flex; flex-direction: column; gap: 2px; padding-right: 48px; }
 .lt-acum       { display: inline-block; background: rgba(239,68,68,.85); color:#fff; font-size:.58rem;
                  font-weight:800; border-radius:4px; padding:1px 5px; letter-spacing:.5px; text-transform:uppercase; width:fit-content; }
 .lt-premio     { font-size: .85rem; font-weight: 800; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.5); line-height: 1.1; }
