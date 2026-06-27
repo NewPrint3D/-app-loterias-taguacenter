@@ -718,7 +718,7 @@ const R = {
     if(!bs.length){h+=`<div class="empty"><div class="ei">${lt.emoji}</div><p>Nenhum bolão ativo.</p></div>`;}
     else h+=bs.map(b=>{
       const pg=b.membros.filter(m=>m.pago).length;
-      return`<div class="card cc" style="border-left:4px solid ${lt.cor}" onclick="R._bClick('${b.id}')">
+      return`<div class="card cc" style="border-left:4px solid ${lt.cor};position:relative" onclick="R._bClick('${b.id}')">
         <div class="bl-nome">${b.nome}</div>
         <div class="bl-meta">Concurso #${b.concurso} · ${b.membros.length} membros</div>
         <div class="bl-row">
@@ -726,11 +726,16 @@ const R = {
           <span class="badge b-${b.status==='ativo'?'ativo':'pend'}">${b.status}</span>
         </div>
         <div class="bl-row mt8"><span class="txs muted">${pg}/${b.membros.length} pagos</span><span class="txs muted">${b.numeros.length} jogo${b.numeros.length!==1?'s':''}</span></div>
+        ${admin?`<button class="btn-ico bl-del-btn" title="Excluir bolão" onclick="event.stopPropagation();R._delBolao('${b.id}','${b.nome.replace(/'/g,"\\'")}')">🗑️</button>`:''}
       </div>`;
     }).join('');
     $('view-boloes').innerHTML=h;
   },
   _bClick(id){S.bolao=id; R.ir('bolao');},
+  _delBolao(id, nome) {
+    if(!confirm(`Excluir o bolão "${nome}"?\n\nTodos os membros e pagamentos vinculados também serão removidos. Esta ação não pode ser desfeita.`)) return;
+    DB.boloes.del(id); R._boloes();
+  },
 
   // ---- BOLÃO DETALHE ----
   async _bolao() {
@@ -984,6 +989,15 @@ const R = {
           <label>Cotas disponíveis</label>
           <input id="wcotas" type="number" placeholder="10" oninput="WPP.update()">
         </div>
+      </div>
+      <div class="fg mt8">
+        <label>Frase de incentivo</label>
+        <select id="wfrase-modo" onchange="WPP._onModoFrase(this.value)" style="margin-bottom:8px">
+          <option value="auto">🔄 Automático (muda a cada envio)</option>
+          <option value="custom">✏️ Personalizado</option>
+        </select>
+        <textarea id="wfrase-txt" rows="2" placeholder="Digite sua frase de incentivo..."
+                  style="display:none" oninput="WPP.update()"></textarea>
       </div>
       <div class="sectt mb8">Preview da mensagem</div>
       <div class="wpp-prev" id="wprev">Selecione a loteria para gerar a mensagem...</div>
@@ -1342,6 +1356,35 @@ const R = {
 // =============================================
 const WPP = {
   _msg: '',
+  _fraseIdx: 0,
+  FRASES: [
+    'Participe do nosso bolão e multiplique suas chances!',
+    'Não perca essa oportunidade — vagas limitadas!',
+    'Sorte grande está chegando. Você vai estar dentro? 🍀',
+    'Uma cota, muitas chances de ganhar o prêmio!',
+    'Junte-se ao grupo e dispute o prêmio junto conosco!',
+    'A sorte favorece quem tenta. Entre já!',
+    'Bolão fechado, prêmio perto. Reserve sua cota agora!',
+    'Multiplique suas chances jogando com a turma! 🎰',
+    'Quem não joga, não ganha. Garanta sua cota!',
+    'Venha fazer parte do bolão e torcer junto! 🎉',
+  ],
+
+  _getFrase() {
+    const modo = $('wfrase-modo')?.value || 'auto';
+    if(modo === 'custom') return $('wfrase-txt')?.value?.trim() || WPP.FRASES[0];
+    return WPP.FRASES[WPP._fraseIdx % WPP.FRASES.length];
+  },
+  _rotacionarFrase() {
+    if(($('wfrase-modo')?.value || 'auto') !== 'auto') return;
+    WPP._fraseIdx = (WPP._fraseIdx + 1) % WPP.FRASES.length;
+    WPP.update();
+  },
+  _onModoFrase(modo) {
+    const txt = $('wfrase-txt');
+    if(txt) txt.style.display = modo==='custom' ? 'block' : 'none';
+    WPP.update();
+  },
 
   async aoTrocarLt(ltId) {
     S.loteria = ltId;
@@ -1373,15 +1416,16 @@ const WPP = {
     const dtFmt=dataV?new Date(dataV+'T12:00').toLocaleDateString('pt-BR'):'—';
     const cotas=parseInt($('wcotas')?.value)||0;
     const pfmt=premio>0?fmtPremio(premio):'—';
-    WPP._msg=`🎰 *${lt.nome}* — Bolão Especial! 🍀\n\n💰 Prêmio estimado: *${pfmt}*\n📅 Sorteio: *${dtFmt}*\n${cotas?`🎟️ Cotas disponíveis: *${cotas}*\n`:''}\n✅ Participe do nosso bolão e multiplique suas chances!\n📲 Confirme respondendo essa mensagem.\n\n_Jogue com responsabilidade. Sorteios são aleatórios e auditados pela Caixa._\n\n🍀 Lotérica Taguacenter — Seu parceiro de bolões`;
+    const frase=WPP._getFrase();
+    WPP._msg=`🎰 *${lt.nome}* — Bolão Especial! 🍀\n\n💰 Prêmio estimado: *${pfmt}*\n📅 Sorteio: *${dtFmt}*\n${cotas?`🎟️ Cotas disponíveis: *${cotas}*\n`:''}\n✅ ${frase}\n📲 Confirme respondendo essa mensagem.\n\n_Jogue com responsabilidade. Sorteios são aleatórios e auditados pela Caixa._\n\n🍀 Lotérica Taguacenter — Seu parceiro de bolões`;
     const p=$('wprev'); if(p) p.textContent=WPP._msg;
   },
   copy() {
     if(!WPP._msg){alert('Preencha os campos.');return;}
-    navigator.clipboard?.writeText(WPP._msg).then(()=>alert('Mensagem copiada!')).catch(()=>{
+    navigator.clipboard?.writeText(WPP._msg).then(()=>{ alert('Mensagem copiada!'); WPP._rotacionarFrase(); }).catch(()=>{
       const ta=document.createElement('textarea'); ta.value=WPP._msg;
       document.body.appendChild(ta); ta.select(); document.execCommand('copy');
-      document.body.removeChild(ta); alert('Mensagem copiada!');
+      document.body.removeChild(ta); alert('Mensagem copiada!'); WPP._rotacionarFrase();
     });
   },
   // ---- ESTADO DE DESTINO ----
@@ -1545,7 +1589,7 @@ const WPP = {
 
   _step() {
     const gs=WPP._grupos, i=WPP._passo;
-    if(i>=gs.length){ MODAL.close(); return; }
+    if(i>=gs.length){ MODAL.close(); WPP._rotacionarFrase(); return; }
     const g=gs[i];
     const enc=encodeURIComponent(WPP._msg);
     const link=g.link?.includes('chat.whatsapp.com')?g.link:`https://wa.me/?text=${enc}`;

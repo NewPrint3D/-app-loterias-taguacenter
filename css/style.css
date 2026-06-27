@@ -207,6 +207,8 @@ body {
 .bl-nome   { font-size: .98rem; font-weight: 700; margin-bottom: 5px; }
 .bl-meta   { font-size: .78rem; color: var(--muted); }
 .bl-row    { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+.bl-del-btn { position: absolute; top: 8px; right: 8px; color: var(--red); opacity: .55; font-size: 1rem; padding: 4px 6px; background: none; border: none; cursor: pointer; line-height: 1; }
+.bl-del-btn:hover { opacity: 1; }
 
 /* ---- NÚMERO BOLAS ---- */
 .bolas { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
