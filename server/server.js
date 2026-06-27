@@ -52,6 +52,7 @@ app.get('/api/boloes', async (req, res) => {
     const membros = await pool.query('SELECT * FROM membros');
     const rows = boloes.rows.map(b => ({
       ...b,
+      numeros: typeof b.numeros === 'string' ? JSON.parse(b.numeros || '[]') : (b.numeros || []),
       membros: membros.rows
         .filter(m => m.bolao_id === b.id)
         .map(m => ({ nome: m.nome, fone: m.fone, cotas: m.cotas, pago: m.pago, _id: m.id }))
@@ -159,7 +160,9 @@ app.delete('/api/usuarios/:id', async (req, res) => {
 app.get('/api/config', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM config WHERE id=1');
-    res.json(r.rows[0] || {});
+    const row = r.rows[0] || {};
+    if (row.logs && typeof row.logs === 'string') row.logs = JSON.parse(row.logs || '[]');
+    res.json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -167,7 +170,8 @@ app.put('/api/config', async (req, res) => {
   const { bloqueado, msg, cliente, licenca, validade } = req.body;
   try {
     await pool.query(
-      'UPDATE config SET bloqueado=$1,msg=$2,cliente=$3,licenca=$4,validade=$5 WHERE id=1',
+      `INSERT INTO config(id,bloqueado,msg,cliente,licenca,validade,logs) VALUES(1,$1,$2,$3,$4,$5,'[]')
+       ON CONFLICT(id) DO UPDATE SET bloqueado=$1,msg=$2,cliente=$3,licenca=$4,validade=$5`,
       [bloqueado||false, msg||'', cliente||'Demo', licenca||'DEMO-2024', validade||'2025-12-31']
     );
     res.json({ ok: true });
@@ -177,6 +181,7 @@ app.put('/api/config', async (req, res) => {
 app.post('/api/config/log', async (req, res) => {
   const { m } = req.body;
   try {
+    await pool.query(`INSERT INTO config(id,bloqueado,msg,cliente,licenca,validade,logs) VALUES(1,false,'','Demo','DEMO-2024','2025-12-31','[]') ON CONFLICT(id) DO NOTHING`);
     const c = await pool.query('SELECT logs FROM config WHERE id=1');
     const logs = (c.rows[0]?.logs || []);
     logs.unshift({ m, t: Date.now() });

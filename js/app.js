@@ -6,6 +6,7 @@ const S = {
   user: null, tela: 'home', loteria: null, bolao: null,
   stack: [], ze_i: 0, ze_t: null, dtaps: 0, dtap_t: 0,
   charts: {}, resultados: [], cartela: null, statsF: null,
+  cache: { boloes:[], grupos:[], vendas:[], pags:[], usuarios:[], ctrl:{ bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] } },
 };
 const $ = id => document.getElementById(id);
 const fmt$ = n => 'R$ ' + (n||0).toLocaleString('pt-BR',{minimumFractionDigits:2});
@@ -34,42 +35,63 @@ const WPP_SVG = (size=32) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
 const hoje = () => new Date().toLocaleDateString('pt-BR');
 
 // =============================================
-// DB (localStorage)
+// API backend
+// =============================================
+const API_URL = 'https://api-loterias-taguacenter.onrender.com';
+const _api = {
+  get:  p    => fetch(API_URL+p).then(r=>r.ok?r.json():null).catch(()=>null),
+  post: (p,b) => fetch(API_URL+p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).catch(()=>null),
+  put:  (p,b) => fetch(API_URL+p,{method:'PUT', headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).catch(()=>null),
+  del:  p    => fetch(API_URL+p,{method:'DELETE'}).catch(()=>null),
+};
+
+async function carregarDados() {
+  const [boloes,grupos,vendas,pags,usuarios,ctrl] = await Promise.all([
+    _api.get('/api/boloes'), _api.get('/api/grupos'), _api.get('/api/vendas'),
+    _api.get('/api/pagamentos'), _api.get('/api/usuarios'), _api.get('/api/config'),
+  ]);
+  if (Array.isArray(boloes))   S.cache.boloes   = boloes;
+  if (Array.isArray(grupos))   S.cache.grupos   = grupos;
+  if (Array.isArray(vendas))   S.cache.vendas   = vendas;
+  if (Array.isArray(pags))     S.cache.pags     = pags;
+  if (Array.isArray(usuarios)) S.cache.usuarios = usuarios;
+  if (ctrl && ctrl.id)         S.cache.ctrl     = ctrl;
+}
+
+// =============================================
+// DB (cache em memória + API)
 // =============================================
 const DB = {
-  g: k => JSON.parse(localStorage.getItem(k)||'null'),
-  s: (k,v) => localStorage.setItem(k,JSON.stringify(v)),
-
   boloes: {
-    list: ()  => DB.g('ltr_b') || [],
-    save: b   => { const l=DB.boloes.list(); const i=l.findIndex(x=>x.id===b.id); i>=0?l[i]=b:l.push(b); DB.s('ltr_b',l); },
-    del:  id  => DB.s('ltr_b', DB.boloes.list().filter(b=>b.id!==id)),
-    byLt: lt  => DB.boloes.list().filter(b=>b.loteria===lt),
-    get:  id  => DB.boloes.list().find(b=>b.id===id),
+    list: ()  => S.cache.boloes || [],
+    byLt: lt  => (S.cache.boloes||[]).filter(b=>b.loteria===lt),
+    get:  id  => (S.cache.boloes||[]).find(b=>b.id===id),
+    save: b   => { const l=S.cache.boloes; const i=l.findIndex(x=>x.id===b.id); i>=0?l[i]=b:l.push(b); _api.post('/api/boloes',b); },
+    del:  id  => { S.cache.boloes=S.cache.boloes.filter(b=>b.id!==id); _api.del('/api/boloes/'+id); },
   },
   grupos: {
-    list: ()  => DB.g('ltr_g') || [],
-    save: g   => { const l=DB.grupos.list(); const i=l.findIndex(x=>x.id===g.id); i>=0?l[i]=g:l.push(g); DB.s('ltr_g',l); },
-    del:  id  => DB.s('ltr_g', DB.grupos.list().filter(g=>g.id!==id)),
+    list: ()  => S.cache.grupos || [],
+    save: g   => { const l=S.cache.grupos; const i=l.findIndex(x=>x.id===g.id); i>=0?l[i]=g:l.push(g); _api.post('/api/grupos',g); },
+    del:  id  => { S.cache.grupos=S.cache.grupos.filter(g=>g.id!==id); _api.del('/api/grupos/'+id); },
   },
   vendas: {
-    list: ()  => DB.g('ltr_v') || [],
-    save: v   => { const l=DB.vendas.list(); l.push(v); DB.s('ltr_v',l); },
+    list: ()  => S.cache.vendas || [],
+    save: v   => { S.cache.vendas.push(v); _api.post('/api/vendas',v); },
   },
   pags: {
-    list: ()  => DB.g('ltr_p') || [],
-    save: p   => { const l=DB.pags.list(); const i=l.findIndex(x=>x.id===p.id); i>=0?l[i]=p:l.push(p); DB.s('ltr_p',l); },
+    list: ()  => S.cache.pags || [],
+    save: p   => { const l=S.cache.pags; const i=l.findIndex(x=>x.id===p.id); i>=0?l[i]=p:l.push(p); _api.post('/api/pagamentos',p); },
   },
   usuarios: {
-    list: ()  => DB.g('ltr_u') || [],
-    save: u   => { const l=DB.usuarios.list(); const i=l.findIndex(x=>x.id===u.id); i>=0?l[i]=u:l.push(u); DB.s('ltr_u',l); },
-    del:  id  => DB.s('ltr_u', DB.usuarios.list().filter(u=>u.id!==id)),
-    find: nm  => DB.usuarios.list().find(u=>u.nome.toLowerCase()===nm.toLowerCase()),
+    list: ()  => S.cache.usuarios || [],
+    find: nm  => (S.cache.usuarios||[]).find(u=>u.nome.toLowerCase()===nm.toLowerCase()),
+    save: u   => { const l=S.cache.usuarios; const i=l.findIndex(x=>x.id===u.id); i>=0?l[i]=u:l.push(u); _api.post('/api/usuarios',u); },
+    del:  id  => { S.cache.usuarios=S.cache.usuarios.filter(u=>u.id!==id); _api.del('/api/usuarios/'+id); },
   },
   ctrl: {
-    get: () => DB.g('_z_s_') || { bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] },
-    set: c  => DB.s('_z_s_',c),
-    log: m  => { const c=DB.ctrl.get(); c.logs=[{m,t:Date.now()},...(c.logs||[])].slice(0,50); DB.ctrl.set(c); },
+    get: ()  => S.cache.ctrl || { bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] },
+    set: c   => { S.cache.ctrl=c; _api.put('/api/config',c); },
+    log: m   => { const c=DB.ctrl.get(); c.logs=[{m,t:Date.now()},...(c.logs||[])].slice(0,50); S.cache.ctrl=c; _api.post('/api/config/log',{m}); },
   },
 };
 
@@ -122,7 +144,13 @@ const AUTH = {
     AUTH._start();
   },
 
-  _start() {
+  async _start() {
+    // Mostrar loading enquanto carrega dados do servidor
+    const err = $('login-err');
+    if (err) { err.hidden=false; err.style.color='#aaa'; err.textContent='⏳ Conectando ao servidor...'; }
+    await carregarDados();
+    if (err) { err.hidden=true; err.style.color=''; }
+
     if (S.user.role !== 'dev') {
       const c = DB.ctrl.get();
       if (c.bloqueado) {
@@ -871,7 +899,7 @@ const R = {
     const us=DB.usuarios.list(), i=us.findIndex(u=>u.id===id);
     if(i<0) return;
     us[i].ativo=!us[i].ativo;
-    DB.s('ltr_u',us); R._usuarios();
+    DB.usuarios.save(us[i]); R._usuarios();
   },
   _delUser(id) {
     if(!confirm('Remover usuário?')) return;
@@ -1599,10 +1627,15 @@ const DEV = {
     c.licenca=$('dev-lic')?.value?.trim()||c.licenca;
     DB.ctrl.set(c); DB.ctrl.log('Licença atualizada'); alert('Salvo!'); R._controle();
   },
-  reset() {
+  async reset() {
     if(!confirm('Apagar TODOS os dados? Isso não pode ser desfeito.')) return;
-    const c=DB.ctrl.get();
-    ['ltr_b','ltr_g','ltr_v','ltr_p','ltr_u'].forEach(k=>localStorage.removeItem(k));
+    const c = DB.ctrl.get();
+    await Promise.all([
+      ...S.cache.boloes.map(b=>_api.del('/api/boloes/'+b.id)),
+      ...S.cache.grupos.map(g=>_api.del('/api/grupos/'+g.id)),
+      ...S.cache.usuarios.map(u=>_api.del('/api/usuarios/'+u.id)),
+    ]);
+    S.cache.boloes=[]; S.cache.grupos=[]; S.cache.vendas=[]; S.cache.pags=[]; S.cache.usuarios=[];
     DB.ctrl.set(c); DB.ctrl.log('Dados resetados'); location.reload();
   },
   _btaps: 0, _bt_t: 0,
@@ -1634,7 +1667,7 @@ const DEV = {
   },
   check() {
     const c=DB.ctrl.get();
-    if(c.bloqueado && !localStorage.getItem('ltr_b')){
+    if(c.bloqueado && !S.cache.boloes.length){
       c.bloqueado=false; DB.ctrl.set(c); return false;
     }
     if(c.bloqueado){
