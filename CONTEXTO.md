@@ -5,7 +5,7 @@ Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreS
 Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
 
-## Como rodar
+## Como rodar localmente
 
 ```
 cd C:\Users\User\Downloads\apploterias
@@ -17,13 +17,15 @@ Abrir `http://localhost:8181` no navegador.
 ## Estrutura do projeto
 
 ```
-index.html        — telas, modais e shell do app
-reset.html        — página de reset de dados
-css/style.css     — estilos e tema escuro
-js/config.js      — configurações centrais (APP, LOTERIAS, CREDS, MOCK, FRASES_ZE)
-js/app.js         — toda a lógica: estado global, auth, DB, router, views, WhatsApp, Dev
-img/logo.png      — logo da Lotérica Taguacenter
-img/ze-loteca.png — mascote Zé Loteca
+index.html          — telas, modais e shell do app
+css/style.css       — estilos e tema escuro
+js/config.js        — configurações centrais (APP, LOTERIAS, CREDS, MOCK, FRASES_ZE)
+js/app.js           — toda a lógica: estado, auth, DB, router, views, WhatsApp, Dev
+img/logo.png        — logo da Lotérica Taguacenter
+img/ze-loteca.png   — mascote Zé Loteca
+server/server.js    — API REST Express + Neon PostgreSQL
+server/package.json — dependências do backend
+server/schema.sql   — schema das 7 tabelas Neon (referência)
 ```
 
 ## Acessos / credenciais
@@ -50,87 +52,91 @@ img/ze-loteca.png — mascote Zé Loteca
 
 ## Arquitetura principal (js/app.js)
 
-| Módulo    | Responsabilidade |
-|-----------|-----------------|
-| `S`       | Estado global (usuário, tela, bolão, charts, cache de dados, etc.) |
-| `_api`    | Helper fetch para a API REST (get/post/put/del) |
-| `carregarDados()` | Carrega todos os dados do Neon no login (preenche S.cache) |
-| `DB`      | CRUD — leitura do cache em memória (S.cache), escrita via API + cache |
-| `AUTH`    | Login, logout, verificação de role |
-| `SEED`    | Dados demo iniciais (3 bolões, grupos, 50 vendas mock) |
-| `API`     | Fetch da API Caixa via corsproxy.io, fallback para MOCK |
-| `IA`      | Análise estatística de frequência (quentes/frios) |
-| `ZE`      | Mascote Zé Loteca (frases rotativas + número animado) |
-| `MODAL`   | Abre/fecha modal genérico |
-| `R`       | Router + render de todas as views |
-| `WPP`     | WhatsApp Manager (mensagens, envio passo a passo, share nativo) |
-| `CARTELA` | Upload/download da cartela do bolão (imagem/vídeo/PDF) |
-| `DEV`     | Painel de controle do desenvolvedor (bloquear app, licença, logs) |
+| Módulo            | Responsabilidade |
+|-------------------|-----------------|
+| `S`               | Estado global + S.cache (todos os dados do Neon em memória) |
+| `API_URL`         | `'https://api-loterias-taguacenter.onrender.com'` |
+| `_api`            | Helper fetch para a API REST (get/post/put/del) |
+| `carregarDados()` | Login async — carrega tudo do Neon, parseia NUMERIC→number |
+| `DB`              | CRUD — leitura síncrona do S.cache, escrita fire-and-forget via _api |
+| `AUTH`            | Login (await carregarDados), logout, verificação de role |
+| `SEED`            | Dados demo — só roda se Neon estiver vazio |
+| `API`             | Resultados Caixa: allorigins.win → corsproxy.io → MOCK |
+| `IA`              | Análise estatística de frequência (quentes/frios) |
+| `ZE`              | Mascote Zé Loteca (frases + bola número 13 animada) |
+| `MODAL`           | Abre/fecha modal genérico |
+| `R`               | Router + render de todas as views |
+| `WPP`             | WhatsApp Manager (clipboard, sem navigator.share) |
+| `CARTELA`         | Upload/download cartela (imagem/vídeo/PDF) |
+| `DEV`             | Painel dev: bloquear, licença, logs, reset async (deleta do Neon) |
 
-## Funcionalidades implementadas
+## Banco de dados — Neon PostgreSQL (7 tabelas)
 
-- **Splash screen** com logo e barra de progresso
-- **Login** — admin/dev com senha; cliente com nome + grupo do bolão
-- **Home admin** — cards de loterias com prêmio ao vivo da API Caixa
-- **Home cliente** — saudação por hora, grupo do bolão, link WhatsApp do grupo, cards de loterias + último resultado + números quentes/frios ao vivo
-- **Zé Loteca (mascote)** — frases rotativas a cada 11s, número de bola animado no nav
-- **Bolões** — listar por loteria, criar novo, ver detalhes
-- **Detalhe do bolão** — jogos cadastrados + 3 abas: Resultados, IA (quentes/frios), Membros
-- **Membros** — lista com status de pagamento, toggle pago/pendente (admin), envio de comprovante (cliente)
-- **Gerador de jogos (Zé Loteca)** — tela IA com seletor de loteria, gerador 40% quentes + 20% frios + aleatório, botão "Gerar novo jogo" com animação flip
-- **Resultados gerais** — tela com último resultado de todas as loterias
-- **Admin** — dashboard com totais (vendido, bolões, apostadores, ticket médio) + menu de sub-módulos
-- **WhatsApp Manager** — gerador de mensagem com prêmio/data/cotas buscados da API, preview, copiar, envio passo a passo por grupo ou por participante individual, opção "Volante Pago", share nativo mobile
-- **Cartela do bolão** — drag-and-drop ou seleção de arquivo (imagem/vídeo/PDF), preview, download, anexar no envio WhatsApp
-- **Estatísticas** — filtros por período (7d/30d/mês/tudo/personalizado), visualização por cliente/grupo/loteria, gráfico de barras (Chart.js), ranking
-- **Pagamentos/Comprovantes** — cliente envia foto do comprovante, admin aprova/rejeita, agrupado por grupo→bolão
-- **Gerenciamento de usuários** — cadastrar, ativar/desativar, remover apostadores
-- **Gerenciamento de grupos WhatsApp** — cadastrar grupos com link de convite e nº de membros
-- **Perfil** — info do usuário logado, versão do app, botão sair
-- **Painel Dev** — bloquear/desbloquear app com mensagem customizada, editar licença (cliente/validade/código), log de acessos, reset de dados
-- **Tela de manutenção** — exibida para clientes quando admin bloqueia (desbloqueio via 7 taps)
+```
+grupos     — id, nome, link, membros, ativo
+boloes     — id, loteria, nome, grupo, cotas_total, valor_cota, concurso, status, numeros(JSONB), criado
+membros    — id, bolao_id (FK→boloes CASCADE), nome, fone, cotas, pago
+vendas     — id, bolao_id, loteria, membro, cotas, valor, data
+pagamentos — id, bolao_id, membro, concurso, img, data, status
+usuarios   — id, nome, ativo, criado
+config     — id=1 (única linha), bloqueado, msg, cliente, licenca, validade, logs(JSONB)
+```
 
-## API de resultados
+> IMPORTANTE: PostgreSQL retorna NUMERIC como string JS. carregarDados() converte com `+valor`.
+
+## API de resultados da Caixa
 
 ```
 Base: https://servicebus2.caixa.gov.br/portaldeloterias/api/
-Proxy CORS: https://corsproxy.io/?url=<encoded_url>
-Timeout: 5 segundos → fallback para dados MOCK locais
+A Caixa bloqueia IPs de servidor (403) — chamada é feita client-side com proxies:
+  1º: https://api.allorigins.win/get?url=<encoded> → resposta em {contents:"..."}
+  2º: https://corsproxy.io/?url=<encoded>           → fallback
+  3º: MOCK local (config.js)                         → fallback final
 ```
-
-Endpoints: `/{loteria}/` (último) · `/{loteria}/{concurso}` (específico)
 
 ## Deploy — App Online
 
-**URL Frontend:** https://app-loterias-taguacenter.onrender.com (Render Static Site)
-**URL Backend:** https://api-loterias-taguacenter.onrender.com (Render Web Service)
-**Banco de dados:** Neon PostgreSQL (serverless) — schema em `server/schema.sql`
-**Repositório GitHub:** https://github.com/NewPrint3D/-app-loterias-taguacenter
-**Branch:** main
+**URL Frontend:** https://app-loterias-taguacenter.onrender.com
+**URL Backend:** https://api-loterias-taguacenter.onrender.com
+**Banco de dados:** Neon PostgreSQL — schema em `server/schema.sql`
+**GitHub:** https://github.com/NewPrint3D/-app-loterias-taguacenter
 
-### Como atualizar o app após mudanças no código
+### Como atualizar após mudanças
 
 ```
 git add .
-git commit -m "descrição da mudança"
+git commit -m "descrição"
 git push
 ```
 
-O Render detecta o push e atualiza automaticamente em ~1 minuto.
+## Funcionalidades implementadas (estado em 27/06/2026)
 
-## Correções feitas em 27/06/2026
-
-- Removido `navigator.share` que abria menu do sistema com várias opções
-- Envio para grupos: mensagem copiada automaticamente + arquivo baixado + abre grupo no WhatsApp
-- Modal de envio simplificado
+- Splash screen + bola número **13** animada
+- Login com "⏳ Conectando..." enquanto carrega Neon
+- Home admin: cards com prêmio ao vivo
+- Home cliente: saudação, grupo, WhatsApp, resultados, quentes/frios
+- Zé Loteca: frases + bola **13** no nav
+- Bolões: listar, criar, detalhe (Resultados / IA / Membros)
+- Membros: toggle pago/pendente, envio comprovante
+- Gerador IA: 40% quentes + 20% frios + aleatório
+- Resultados gerais: todas as loterias
+- Admin dashboard: total vendido, bolões, apostadores, ticket médio
+- WhatsApp Manager: mensagem, clipboard, envio por grupo/participante (sem navigator.share)
+- Cartela: drag-and-drop, preview, download
+- Estatísticas: filtros **7d / 15d / 30d / Tudo / Personalizado**, por cliente/grupo/loteria, Chart.js
+- Pagamentos/Comprovantes: envio e aprovação
+- Usuários: cadastrar, ativar/desativar, remover
+- Grupos WhatsApp: link de convite + membros
+- Perfil: info + logout
+- Painel Dev: bloquear app, licença, logs, reset async
+- Tela manutenção: exibida para clientes bloqueados
 
 ## Próximos passos pendentes
 
-1. Domínio `wvstudio3d.com` → apontar para o Render
-2. Backend WhatsApp no Render → envio automático + import de membros do grupo
+1. **Domínio** — subdomínio em `wvstudio3d.com` ou comprar `apploteriastaguacenter.com`
+2. **Baileys bot** — import membros do grupo WhatsApp + envio automático (chip dedicado pré-pago + QR scan pelo admin)
 
 ## Dados de teste
 
-Comprovantes de teste em:
 - `C:\Users\User\Downloads\comprovante para teste app loterias.jpeg`
 - `C:\Users\User\Downloads\comprovante para teste app loterias (1).jpeg`
