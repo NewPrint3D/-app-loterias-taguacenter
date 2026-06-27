@@ -50,10 +50,17 @@ async function carregarDados() {
     _api.get('/api/boloes'), _api.get('/api/grupos'), _api.get('/api/vendas'),
     _api.get('/api/pagamentos'), _api.get('/api/usuarios'), _api.get('/api/config'),
   ]);
-  if (Array.isArray(boloes))   S.cache.boloes   = boloes;
-  if (Array.isArray(grupos))   S.cache.grupos   = grupos;
-  if (Array.isArray(vendas))   S.cache.vendas   = vendas;
-  if (Array.isArray(pags))     S.cache.pags     = pags;
+  // PostgreSQL retorna NUMERIC como string — converter para number
+  if (Array.isArray(boloes))   S.cache.boloes   = boloes.map(b => ({
+    ...b,
+    valor_cota:  +b.valor_cota  || 0,
+    cotas_total: +b.cotas_total || 0,
+    concurso:    +b.concurso    || 0,
+    membros: (b.membros||[]).map(m => ({ ...m, cotas: +m.cotas||0 })),
+  }));
+  if (Array.isArray(grupos))   S.cache.grupos   = grupos.map(g => ({ ...g, membros: +g.membros||0 }));
+  if (Array.isArray(vendas))   S.cache.vendas   = vendas.map(v => ({ ...v, valor: +v.valor||0, cotas: +v.cotas||0 }));
+  if (Array.isArray(pags))     S.cache.pags     = pags.map(p => ({ ...p, concurso: +p.concurso||0 }));
   if (Array.isArray(usuarios)) S.cache.usuarios = usuarios;
   if (ctrl && ctrl.id)         S.cache.ctrl     = ctrl;
 }
