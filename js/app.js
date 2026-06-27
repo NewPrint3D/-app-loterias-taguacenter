@@ -267,15 +267,25 @@ const SEED = {
 // API CAIXA
 // =============================================
 const API = {
+  _BASE: 'https://servicebus2.caixa.gov.br/portaldeloterias/api/',
   async fetch(lt, conc='') {
-    const url = API_URL + '/api/caixa/' + lt + (conc ? '/' + conc : '');
-    try {
-      const r = await Promise.race([
-        fetch(url).then(r=>r.json()),
-        new Promise((_,rej)=>setTimeout(()=>rej('timeout'),8000)),
-      ]);
-      return API.parse(r);
-    } catch { return null; }
+    const caixaUrl = API._BASE + lt + '/' + conc;
+    const proxies = [
+      `https://api.allorigins.win/get?url=${encodeURIComponent(caixaUrl)}`,
+      `https://corsproxy.io/?url=${encodeURIComponent(caixaUrl)}`,
+    ];
+    for (const p of proxies) {
+      try {
+        const r = await Promise.race([
+          fetch(p).then(r=>r.json()),
+          new Promise((_,rej)=>setTimeout(()=>rej('to'),5000)),
+        ]);
+        const data = r.contents ? JSON.parse(r.contents) : r;
+        const parsed = API.parse(data);
+        if (parsed) return parsed;
+      } catch {}
+    }
+    return null;
   },
   parse(r) {
     if (!r||!r.listaDezenas) return null;
