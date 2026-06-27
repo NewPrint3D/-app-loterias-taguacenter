@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Lotérica Taguacenter — Bolões</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- SPLASH -->
+<div id="splash">
+  <div class="sp-inner">
+    <div class="ze-big"></div>
+    <img src="img/logo.png" alt="Lotérica Taguacenter" class="sp-logo">
+    <p>Seu parceiro de bolões!</p>
+    <div class="sp-bar"><div class="sp-fill"></div></div>
+  </div>
+</div>
+
+<!-- LOGIN -->
+<div id="tela-login" class="tela-fs" hidden>
+  <div class="login-box">
+    <div class="ze-sm"></div>
+    <h2>Bem-vindo!</h2>
+    <p class="login-sub" id="login-sub">Digite seu nome para entrar</p>
+
+    <div class="field">
+      <label>Seu nome</label>
+      <input id="inp-nome" type="text" placeholder="Ex: João Silva" autocomplete="off"
+             oninput="AUTH.onNomeInput(this.value)">
+    </div>
+
+    <div class="field" id="field-grupo" hidden>
+      <label>Seu grupo de bolão</label>
+      <input id="inp-grupo" type="text" placeholder="Ex: Turma da Churrasqueira" autocomplete="off"
+             onkeydown="if(event.key==='Enter')AUTH.entrar()">
+    </div>
+
+    <div class="field" id="field-senha" hidden>
+      <label>Senha do administrador</label>
+      <input id="inp-p" type="password" placeholder="••••••••"
+             onkeydown="if(event.key==='Enter')AUTH.entrar()">
+    </div>
+
+    <button class="btn btn-p btn-f" onclick="AUTH.entrar()">Entrar</button>
+    <p id="login-err" class="erro" hidden></p>
+  </div>
+</div>
+
+<!-- APP SHELL -->
+<div id="shell" hidden>
+
+  <header id="header">
+    <button id="btn-back" class="btn-ico" hidden onclick="R.voltar()">←</button>
+    <div id="h-title" class="h-logo" onclick="DEV.tap()"><img src="img/logo.png" alt="Lotérica Taguacenter" class="h-logo-img"></div>
+    <div class="h-right">
+      <span id="h-badge" class="badge"></span>
+      <button class="btn-ico" title="Sair" onclick="AUTH.sair()">⏻</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <div id="view-home"        class="view"></div>
+    <div id="view-ia"          class="view" hidden></div>
+    <div id="view-boloes"      class="view" hidden></div>
+    <div id="view-bolao"       class="view" hidden></div>
+    <div id="view-resultados"  class="view" hidden></div>
+    <div id="view-admin"       class="view" hidden></div>
+    <div id="view-whatsapp"    class="view" hidden></div>
+    <div id="view-stats"       class="view" hidden></div>
+    <div id="view-pagamentos"  class="view" hidden></div>
+    <div id="view-usuarios"    class="view" hidden></div>
+    <div id="view-perfil"      class="view" hidden></div>
+    <div id="view-controle"    class="view" hidden></div>
+  </main>
+
+  <!-- Mascote Zé Loteca (dentro da área do nav) -->
+  <div id="ze" onclick="ZE.proximo()">
+    <div class="ze-bola" id="ze-bola">
+      <span class="ze-num" id="ze-num">07</span>
+    </div>
+    <div class="ze-fala" id="ze-txt"></div>
+  </div>
+
+  <!-- Nav apostador (usuário simples) -->
+  <nav id="nav-user" hidden>
+    <button class="nb on" data-v="home"   onclick="R.ir('home')">🏠<span>Início</span></button>
+    <button class="nb"    data-v="ia"     onclick="R.ir('ia')">🎯<span>Zé Loteca</span></button>
+    <button class="nb"    data-v="perfil" onclick="R.ir('perfil')">👤<span>Conta</span></button>
+  </nav>
+
+  <!-- Nav admin / dev -->
+  <nav id="nav-admin" hidden>
+    <button class="nb on" data-v="home"       onclick="R.ir('home')">🏠<span>Início</span></button>
+    <button class="nb"    data-v="boloes"     onclick="R.ir('boloes')">🎲<span>Bolões</span></button>
+    <button class="nb"    data-v="resultados" onclick="R.ir('resultados')">📊<span>Result.</span></button>
+    <button class="nb"    data-v="admin"      onclick="R.ir('admin')">🛠️<span>Admin</span></button>
+    <button class="nb"    data-v="perfil"     onclick="R.ir('perfil')">👤<span>Conta</span></button>
+  </nav>
+
+</div>
+
+<!-- MODAL -->
+<div id="modal" class="m-overlay" hidden onclick="MODAL.close()">
+  <div class="m-box" onclick="event.stopPropagation()">
+    <button class="m-close" onclick="MODAL.close()">✕</button>
+    <div id="m-body"></div>
+  </div>
+</div>
+
+<!-- BLOQUEIO -->
+<div id="bloqueio" class="tela-fs" hidden>
+  <div class="bl-inner">
+    <div class="bl-icon" onclick="DEV.blTap()" style="cursor:default;user-select:none">🔒</div>
+    <h2>App em Manutenção</h2>
+    <p id="bl-msg">Sistema temporariamente indisponível.<br>Entre em contato com o suporte.</p>
+    <small>Ref: ZL-MNT-01</small>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

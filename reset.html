@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="UTF-8"><title>Reset</title>
+<style>body{background:#0f172a;color:#f1f5f9;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}</style>
+</head>
+<body>
+<div>
+  <div style="font-size:3rem;margin-bottom:16px">🔄</div>
+  <h2 id="msg">Limpando dados...</h2>
+  <p id="sub" style="color:#94a3b8;margin-top:8px"></p>
+</div>
+<script>
+  ['_z_s_','ltr_b','ltr_g','ltr_v','ltr_p','ltr_s'].forEach(k => localStorage.removeItem(k));
+  sessionStorage.clear();
+  document.getElementById('msg').textContent = '✅ Pronto!';
+  document.getElementById('sub').textContent = 'Redirecionando para o app...';
+  setTimeout(() => { window.location.href = '/'; }, 1500);
+</script>
+</body>
+</html>
