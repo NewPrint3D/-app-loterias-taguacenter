@@ -1,7 +1,8 @@
 # App de Loterias — Lotérica Taguacenter
 
 App de gestão de bolões para lotérica física (Taguacenter, Brasília).
-100% client-side, sem backend, persistência via `localStorage`.
+Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreSQL.
+Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
 
 ## Como rodar
@@ -51,8 +52,10 @@ img/ze-loteca.png — mascote Zé Loteca
 
 | Módulo    | Responsabilidade |
 |-----------|-----------------|
-| `S`       | Estado global (usuário, tela, bolão, charts, etc.) |
-| `DB`      | CRUD no localStorage (bolões, grupos, vendas, pagamentos, usuários, ctrl) |
+| `S`       | Estado global (usuário, tela, bolão, charts, cache de dados, etc.) |
+| `_api`    | Helper fetch para a API REST (get/post/put/del) |
+| `carregarDados()` | Carrega todos os dados do Neon no login (preenche S.cache) |
+| `DB`      | CRUD — leitura do cache em memória (S.cache), escrita via API + cache |
 | `AUTH`    | Login, logout, verificação de role |
 | `SEED`    | Dados demo iniciais (3 bolões, grupos, 50 vendas mock) |
 | `API`     | Fetch da API Caixa via corsproxy.io, fallback para MOCK |
@@ -96,6 +99,35 @@ Timeout: 5 segundos → fallback para dados MOCK locais
 ```
 
 Endpoints: `/{loteria}/` (último) · `/{loteria}/{concurso}` (específico)
+
+## Deploy — App Online
+
+**URL Frontend:** https://app-loterias-taguacenter.onrender.com (Render Static Site)
+**URL Backend:** https://api-loterias-taguacenter.onrender.com (Render Web Service)
+**Banco de dados:** Neon PostgreSQL (serverless) — schema em `server/schema.sql`
+**Repositório GitHub:** https://github.com/NewPrint3D/-app-loterias-taguacenter
+**Branch:** main
+
+### Como atualizar o app após mudanças no código
+
+```
+git add .
+git commit -m "descrição da mudança"
+git push
+```
+
+O Render detecta o push e atualiza automaticamente em ~1 minuto.
+
+## Correções feitas em 27/06/2026
+
+- Removido `navigator.share` que abria menu do sistema com várias opções
+- Envio para grupos: mensagem copiada automaticamente + arquivo baixado + abre grupo no WhatsApp
+- Modal de envio simplificado
+
+## Próximos passos pendentes
+
+1. Domínio `wvstudio3d.com` → apontar para o Render
+2. Backend WhatsApp no Render → envio automático + import de membros do grupo
 
 ## Dados de teste
 
