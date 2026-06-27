@@ -267,14 +267,12 @@ const SEED = {
 // API CAIXA
 // =============================================
 const API = {
-  BASE:  'https://servicebus2.caixa.gov.br/portaldeloterias/api/',
-  PROXY: 'https://corsproxy.io/?url=',
   async fetch(lt, conc='') {
-    const url = API.BASE + lt + '/' + conc;
+    const url = API_URL + '/api/caixa/' + lt + (conc ? '/' + conc : '');
     try {
       const r = await Promise.race([
-        fetch(API.PROXY + encodeURIComponent(url)).then(r=>r.json()),
-        new Promise((_,rej)=>setTimeout(()=>rej('timeout'),5000)),
+        fetch(url).then(r=>r.json()),
+        new Promise((_,rej)=>setTimeout(()=>rej('timeout'),8000)),
       ]);
       return API.parse(r);
     } catch { return null; }

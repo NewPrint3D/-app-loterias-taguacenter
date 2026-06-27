@@ -18,6 +18,20 @@ const pool = new Pool({
 // ---- HEALTH ----
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+// ---- PROXY CAIXA (evita CORS no frontend) ----
+app.get('/api/caixa/:loteria/:concurso?', async (req, res) => {
+  const { loteria, concurso } = req.params;
+  const url = `https://servicebus2.caixa.gov.br/portaldeloterias/api/${loteria}/${concurso || ''}`;
+  try {
+    const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!r.ok) { res.status(r.status).json({ error: 'Caixa retornou ' + r.status }); return; }
+    const data = await r.json();
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---- GRUPOS ----
 app.get('/api/grupos', async (req, res) => {
   try {
