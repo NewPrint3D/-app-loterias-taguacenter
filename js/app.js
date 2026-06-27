@@ -1042,10 +1042,10 @@ const R = {
         <div class="fg">
           <label>Período</label>
           <div class="pbtns">
-            <button class="pbtn${f.periodo==='7d'?' on':''}"   onclick="R._sfPeriodo('7d',this)">7 dias</button>
-            <button class="pbtn${f.periodo==='30d'?' on':''}"  onclick="R._sfPeriodo('30d',this)">30 dias</button>
-            <button class="pbtn${f.periodo==='mes'?' on':''}"  onclick="R._sfPeriodo('mes',this)">Este mês</button>
-            <button class="pbtn${f.periodo==='tudo'?' on':''}" onclick="R._sfPeriodo('tudo',this)">Tudo</button>
+            <button class="pbtn${f.periodo==='7d'?' on':''}"    onclick="R._sfPeriodo('7d',this)">7 dias</button>
+            <button class="pbtn${f.periodo==='15d'?' on':''}"   onclick="R._sfPeriodo('15d',this)">15 dias</button>
+            <button class="pbtn${f.periodo==='30d'?' on':''}"   onclick="R._sfPeriodo('30d',this)">30 dias</button>
+            <button class="pbtn${f.periodo==='tudo'?' on':''}"  onclick="R._sfPeriodo('tudo',this)">Tudo</button>
             <button class="pbtn${f.periodo==='custom'?' on':''}" onclick="R._sfPeriodo('custom',this)">Personalizado</button>
           </div>
         </div>
@@ -1088,9 +1088,9 @@ const R = {
     const hoje = new Date(); hoje.setHours(23,59,59,999);
     let de = new Date(0), ate = new Date(hoje);
     switch(f.periodo) {
-      case '7d':   de=new Date(); de.setDate(de.getDate()-7); break;
+      case '7d':   de=new Date(); de.setDate(de.getDate()-7);  break;
+      case '15d':  de=new Date(); de.setDate(de.getDate()-15); break;
       case '30d':  de=new Date(); de.setDate(de.getDate()-30); break;
-      case 'mes':  de=new Date(hoje.getFullYear(),hoje.getMonth(),1); break;
       case 'tudo': de=new Date(0); break;
       case 'custom':
         if($('sf-de')?.value)  { S.statsF.de=$('sf-de').value;  de=new Date($('sf-de').value); }
@@ -1112,7 +1112,7 @@ const R = {
     const total=vs.reduce((s,v)=>s+(v.valor||0),0);
     const tmedio=total/vs.length;
     const nCli=new Set(vs.map(v=>v.membro)).size;
-    const labels = {'7d':'últimos 7 dias','30d':'últimos 30 dias','mes':'este mês','tudo':'todo o período','custom':'período selecionado'};
+    const labels = {'7d':'últimos 7 dias','15d':'últimos 15 dias','30d':'últimos 30 dias','tudo':'todo o período','custom':'período selecionado'};
     const pLabel = labels[f.periodo]||'';
 
     // Dados para o gráfico + ranking conforme visão
