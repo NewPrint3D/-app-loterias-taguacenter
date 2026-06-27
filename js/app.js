@@ -15,15 +15,15 @@ function fmtPremio(v, curto=false) {
   if (!v) return '';
   if (v >= 1e9) {
     const b = v/1e9, s = b%1===0 ? b.toFixed(0) : b.toFixed(1).replace('.',',');
-    return curto ? `R$ ${s}Bi` : `R$ ${s}Bi (${s} ${b>=2?'bilhões':'bilhão'})`;
+    return curto ? `R$ ${s}Bi` : `R$ ${s} ${b>=2?'bilhões':'bilhão'}`;
   }
   if (v >= 1e6) {
     const m = v/1e6, s = m%1===0 ? m.toFixed(0) : m.toFixed(1).replace('.',',');
-    return curto ? `R$ ${s}M` : `R$ ${s}M (${s} ${m>=2?'milhões':'milhão'})`;
+    return curto ? `R$ ${s}M` : `R$ ${s} ${m>=2?'milhões':'milhão'}`;
   }
   if (v >= 1e3) {
     const k = v/1e3, s = k%1===0 ? k.toFixed(0) : k.toFixed(1).replace('.',',');
-    return curto ? `R$ ${s}mil` : `R$ ${s}mil (${s} mil)`;
+    return curto ? `R$ ${s}mil` : `R$ ${s} mil`;
   }
   return fmt$(v);
 }
