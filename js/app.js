@@ -15,17 +15,15 @@ function fmtPremio(v, curto=false) {
   if (!v) return '';
   if (v >= 1e9) {
     const b = v/1e9, s = b%1===0 ? b.toFixed(0) : b.toFixed(1).replace('.',',');
-    const ext = `${s} ${b>=2?'bilhões':'bilhão'} de reais`;
-    return curto ? `R$ ${s}Bi` : `R$ ${s}Bi (${ext})`;
+    return curto ? `R$ ${s}Bi` : `R$ ${s}Bi (${s} ${b>=2?'bilhões':'bilhão'})`;
   }
   if (v >= 1e6) {
     const m = v/1e6, s = m%1===0 ? m.toFixed(0) : m.toFixed(1).replace('.',',');
-    const ext = `${s} ${m>=2?'milhões':'milhão'} de reais`;
-    return curto ? `R$ ${s}M` : `R$ ${s}M (${ext})`;
+    return curto ? `R$ ${s}M` : `R$ ${s}M (${s} ${m>=2?'milhões':'milhão'})`;
   }
   if (v >= 1e3) {
     const k = v/1e3, s = k%1===0 ? k.toFixed(0) : k.toFixed(1).replace('.',',');
-    return curto ? `R$ ${s}mil` : `R$ ${s}mil (${s} mil reais)`;
+    return curto ? `R$ ${s}mil` : `R$ ${s}mil (${s} mil)`;
   }
   return fmt$(v);
 }
@@ -426,9 +424,8 @@ const R = {
       const r=dados[0]; const el=$(`ld-${lt.id}`); if(!el) return;
       if(!r){el.innerHTML='';return;}
       const p=r.prox||r.premio||0;
-      const pCurto=fmtPremio(p,true), pExt=fmtPremio(p,false);
       el.innerHTML=`${r.acumulado?'<span class="lt-acum">ACUMULADO</span>':''}
-        ${p?`<div class="lt-premio">${pCurto}</div><div class="lt-premio-ext">${pExt}</div>`:''}
+        ${p?`<div class="lt-premio">${fmtPremio(p)}</div>`:''}
         ${r.dataProxConcurso?`<div class="lt-data-card">📅 ${r.dataProxConcurso}</div>`:''}`;
     }));
   },
@@ -500,7 +497,7 @@ const R = {
       const p = r.prox || r.premio || 0;
       el.innerHTML = `
         ${r.acumulado ? '<span class="lt-acum">ACUM.</span>' : ''}
-        ${p ? `<div class="lt-premio">${fmtPremio(p,true)}</div>` : ''}
+        ${p ? `<div class="lt-premio">${fmtPremio(p)}</div>` : ''}
         ${r.dataProxConcurso ? `<div class="lt-data-card">📅 ${r.dataProxConcurso}</div>` : ''}`;
     }));
 
