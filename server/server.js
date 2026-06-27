@@ -23,7 +23,14 @@ app.get('/api/caixa/:loteria/:concurso?', async (req, res) => {
   const { loteria, concurso } = req.params;
   const url = `https://servicebus2.caixa.gov.br/portaldeloterias/api/${loteria}/${concurso || ''}`;
   try {
-    const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const r = await fetch(url, {
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Referer': 'https://loterias.caixa.gov.br/Paginas/Mega-Sena.aspx',
+        'Origin': 'https://loterias.caixa.gov.br',
+      }
+    });
     if (!r.ok) { res.status(r.status).json({ error: 'Caixa retornou ' + r.status }); return; }
     const data = await r.json();
     res.json(data);
