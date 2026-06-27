@@ -215,6 +215,8 @@ const AUTH = {
 // =============================================
 const SEED = {
   init() {
+    // Não rodar SEED se o banco já tem qualquer dado (produção)
+    if (S.cache.boloes.length || S.cache.usuarios.length || S.cache.grupos.length) return;
     // Usuários demo
     if (!DB.usuarios.list().length) {
       [
@@ -972,7 +974,7 @@ const R = {
       <div class="fr">
         <div class="fg">
           <label>Prêmio estimado (R$) <span id="wprx-badge" class="txs" style="color:var(--primary)"></span></label>
-          <input id="wpremio" type="number" placeholder="Buscando da Caixa..." oninput="WPP.update()">
+          <input id="wpremio" type="text" placeholder="Buscando da Caixa..." oninput="WPP.update()">
         </div>
         <div class="fg">
           <label>Data do próximo sorteio</label>
@@ -1352,7 +1354,7 @@ const WPP = {
     const r = dados[0];
     if(r) {
       const inp = $('wpremio');
-      if(inp) inp.value = r.prox || r.premio || '';
+      if(inp) { const v=r.prox||r.premio||0; inp.value = v ? Number(v).toLocaleString('pt-BR') : ''; }
       const inpD = $('wdata');
       if(inpD && r.dataProxConcurso) {
         const pts = r.dataProxConcurso.split('/');
@@ -1366,7 +1368,7 @@ const WPP = {
 
   update() {
     const lt=LOTERIAS[$('wlt')?.value]; if(!lt) return;
-    const premio=parseFloat($('wpremio')?.value)||0;
+    const premio=parseFloat(($('wpremio')?.value||'').replace(/\./g,'').replace(',','.'))||0;
     const dataV=$('wdata')?.value;
     const dtFmt=dataV?new Date(dataV+'T12:00').toLocaleDateString('pt-BR'):'—';
     const cotas=parseInt($('wcotas')?.value)||0;
