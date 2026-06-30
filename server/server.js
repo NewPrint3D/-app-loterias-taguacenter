@@ -48,12 +48,12 @@ app.get('/api/grupos', async (req, res) => {
 });
 
 app.post('/api/grupos', async (req, res) => {
-  const { id, nome, link, membros, ativo } = req.body;
+  const { id, nome, link, membros, ativo, jid } = req.body;
   try {
     await pool.query(
-      `INSERT INTO grupos(id,nome,link,membros,ativo) VALUES($1,$2,$3,$4,$5)
-       ON CONFLICT(id) DO UPDATE SET nome=$2,link=$3,membros=$4,ativo=$5`,
-      [id, nome, link||'', membros||0, ativo!==false]
+      `INSERT INTO grupos(id,nome,link,membros,ativo,jid) VALUES($1,$2,$3,$4,$5,$6)
+       ON CONFLICT(id) DO UPDATE SET nome=$2,link=$3,membros=$4,ativo=$5,jid=$6`,
+      [id, nome, link||'', membros||0, ativo!==false, jid||'']
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -209,6 +209,197 @@ app.post('/api/config/log', async (req, res) => {
     await pool.query('UPDATE config SET logs=$1 WHERE id=1', [JSON.stringify(logs.slice(0,50))]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// =============================================
+// WHATSAPP BOT (Baileys)
+// =============================================
+let botSock   = null;
+let botStatus = 'desconectado'; // desconectado | conectando | aguardando_qr | conectado
+let botQr     = null;
+
+let _pinoLog;
+try { _pinoLog = require('pino')({ level: 'silent' }); } catch { _pinoLog = undefined; }
+
+// Migração: coluna jid nos grupos
+pool.query(`ALTER TABLE grupos ADD COLUMN IF NOT EXISTS jid TEXT DEFAULT ''`).catch(() => {});
+
+// Tabela de sessão persistente
+pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`).catch(() => {});
+
+async function pgAuthState() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`);
+  const { BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
+
+  const read = async key => {
+    const r = await pool.query('SELECT valor FROM wpp_auth WHERE chave=$1', [key]);
+    if (!r.rows[0]) return null;
+    try { return JSON.parse(r.rows[0].valor, BufferJSON.reviver); } catch { return null; }
+  };
+  const write = async (key, data) => {
+    const json = JSON.stringify(data, BufferJSON.replacer);
+    await pool.query(`INSERT INTO wpp_auth(chave,valor) VALUES($1,$2) ON CONFLICT(chave) DO UPDATE SET valor=$2`, [key, json]);
+  };
+  const remove = async key => pool.query('DELETE FROM wpp_auth WHERE chave=$1', [key]);
+
+  const creds = await read('creds') || initAuthCreds();
+  const state = {
+    creds,
+    keys: {
+      get: async (type, ids) => {
+        const data = {};
+        await Promise.all(ids.map(async id => {
+          const v = await read(`k_${type}_${id}`);
+          if (v != null) data[id] = v;
+        }));
+        return data;
+      },
+      set: async data => {
+        await Promise.all(Object.entries(data).flatMap(([cat, items]) =>
+          Object.entries(items).map(([id, v]) =>
+            v != null ? write(`k_${cat}_${id}`, v) : remove(`k_${cat}_${id}`)
+          )
+        ));
+      }
+    }
+  };
+  return { state, saveCreds: () => write('creds', state.creds) };
+}
+
+async function conectarBot() {
+  try {
+    const {
+      default: makeWASocket,
+      DisconnectReason,
+      fetchLatestBaileysVersion,
+      makeCacheableSignalKeyStore,
+    } = require('@whiskeysockets/baileys');
+    const QR = require('qrcode');
+
+    botStatus = 'conectando';
+    const { state, saveCreds } = await pgAuthState();
+    const { version } = await fetchLatestBaileysVersion();
+
+    botSock = makeWASocket({
+      version,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, _pinoLog),
+      },
+      logger: _pinoLog,
+      printQRInTerminal: false,
+      browser: ['Loterias Bot', 'Chrome', '1.0'],
+      connectTimeoutMs: 60000,
+      generateHighQualityLinkPreview: false,
+    });
+
+    botSock.ev.on('creds.update', saveCreds);
+
+    botSock.ev.on('connection.update', async upd => {
+      const { connection, lastDisconnect, qr } = upd;
+      if (qr) {
+        botQr = await QR.toDataURL(qr);
+        botStatus = 'aguardando_qr';
+        console.log('Bot: QR gerado');
+      }
+      if (connection === 'open') {
+        botStatus = 'conectado';
+        botQr = null;
+        console.log('Bot WhatsApp conectado!');
+      }
+      if (connection === 'close') {
+        const { DisconnectReason: DR } = require('@whiskeysockets/baileys');
+        const cod = lastDisconnect?.error?.output?.statusCode;
+        botSock = null; botStatus = 'desconectado'; botQr = null;
+        if (cod !== DR.loggedOut) {
+          console.log('Bot: reconectando em 5s...');
+          setTimeout(conectarBot, 5000);
+        } else {
+          console.log('Bot: deslogado — removendo credenciais');
+          await pool.query('DELETE FROM wpp_auth');
+        }
+      }
+    });
+  } catch (e) {
+    console.error('Bot: erro ao conectar —', e.message);
+    botStatus = 'desconectado';
+  }
+}
+
+// Reconecta automaticamente se houver credenciais salvas
+setTimeout(async () => {
+  try {
+    const r = await pool.query(`SELECT 1 FROM wpp_auth WHERE chave='creds' LIMIT 1`);
+    if (r.rows.length) { console.log('Credenciais WPP encontradas. Reconectando...'); conectarBot(); }
+  } catch { /* tabela ainda não existe */ }
+}, 3000);
+
+// ---- ROTAS WPP BOT ----
+
+app.get('/api/wpp/status', (req, res) => {
+  res.json({ status: botStatus, qr: botQr });
+});
+
+app.post('/api/wpp/conectar', (req, res) => {
+  if (botStatus === 'conectado') return res.json({ ok: true, msg: 'Já conectado' });
+  if (botStatus === 'conectando' || botStatus === 'aguardando_qr')
+    return res.json({ ok: true, msg: 'Aguardando conexão' });
+  conectarBot();
+  res.json({ ok: true, msg: 'Iniciando...' });
+});
+
+app.post('/api/wpp/desconectar', async (req, res) => {
+  try {
+    if (botSock) { await botSock.logout().catch(() => {}); botSock = null; }
+    botStatus = 'desconectado'; botQr = null;
+    await pool.query('DELETE FROM wpp_auth');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/wpp/grupos-bot', async (req, res) => {
+  if (!botSock || botStatus !== 'conectado') return res.json({ ok: false, grupos: [] });
+  try {
+    const mapa = await botSock.groupFetchAllParticipating();
+    const grupos = Object.entries(mapa).map(([jid, g]) => ({
+      jid, nome: g.subject, membros: g.participants?.length || 0,
+    }));
+    res.json({ ok: true, grupos });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.put('/api/grupos/:id/jid', async (req, res) => {
+  try {
+    await pool.query('UPDATE grupos SET jid=$1 WHERE id=$2', [req.body.jid || '', req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/wpp/enviar', async (req, res) => {
+  if (!botSock || botStatus !== 'conectado')
+    return res.status(503).json({ error: 'Bot não conectado' });
+  const { targets, mensagem, imagem } = req.body;
+  if (!Array.isArray(targets) || !targets.length || !mensagem)
+    return res.status(400).json({ error: 'Parâmetros inválidos' });
+
+  const resultados = [];
+  for (const jid of targets) {
+    try {
+      if (imagem) {
+        const b64 = imagem.includes(',') ? imagem.split(',')[1] : imagem;
+        await botSock.sendMessage(jid, { image: Buffer.from(b64, 'base64'), caption: mensagem });
+      } else {
+        await botSock.sendMessage(jid, { text: mensagem });
+      }
+      resultados.push({ jid, ok: true });
+      console.log('Bot enviou para', jid);
+    } catch (e) {
+      console.error('Bot: falha em', jid, e.message);
+      resultados.push({ jid, ok: false, erro: e.message });
+    }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  res.json({ ok: true, resultados });
 });
 
 app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));

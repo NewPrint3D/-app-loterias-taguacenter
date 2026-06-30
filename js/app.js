@@ -870,7 +870,8 @@ const R = {
         <div class="amenu-c" onclick="R.ir('boloes')"><span class="amenu-i">🎲</span><div class="amenu-n">Bolões</div></div>
         <div class="amenu-c" onclick="R.ir('usuarios')"><span class="amenu-i">👥</span><div class="amenu-n">Usuários <span style="font-size:.65rem;background:var(--primary);color:#000;border-radius:10px;padding:1px 5px;margin-left:2px">${qtUsr}</span></div></div>
         ${isdev?`<div class="amenu-c" style="border-color:var(--red)" onclick="R.ir('controle')"><span class="amenu-i">🔒</span><div class="amenu-n" style="color:var(--red)">Controle Dev</div></div>`:''}
-      </div>`;
+      </div>
+      ${TEMA.renderSeletor()}`;
   },
 
   // ---- USUÁRIOS (admin) ----
@@ -1004,7 +1005,10 @@ const R = {
       <button class="btn btn-p btn-f mt8" onclick="WPP.copy()">📋 Copiar mensagem</button>
 
       <div class="divider"></div>
-      <div class="sectt mb8">Destinatários</div>
+      <div class="sectt mb8" style="display:flex;align-items:center;justify-content:space-between">
+        Destinatários
+        <span id="bot-badge" class="badge txs" style="font-size:.65rem">${BOT._badgeHtml(BOT._status)}</span>
+      </div>
       <div class="dest-tabs mb12">
         <button class="dtab on" onclick="WPP.setDest('todos',this)">🌐 Todos</button>
         <button class="dtab" onclick="WPP.setDest('grupos',this)">📋 Grupos</button>
@@ -1347,9 +1351,160 @@ const R = {
         <h3>📝 Log (últimos acessos)</h3>
         ${(c.logs||[]).slice(0,10).map(l=>`<div class="dev-row"><span class="dev-lbl">${new Date(l.t).toLocaleString('pt-BR')}</span><span class="txs">${l.m}</span></div>`).join('')||'<p class="muted tsm">Sem registros.</p>'}
       </div>
+      <div id="bot-wrap" class="mt4"><div class="loading"><div class="spinner"></div> Verificando bot...</div></div>
       <button class="btn btn-d btn-f mt16" onclick="DEV.reset()">⚠️ Limpar todos os dados</button>`;
+    BOT.renderPainel().then(h => {
+      const el = $('bot-wrap');
+      if (el) el.innerHTML = h;
+      if (BOT._status === 'aguardando_qr' || BOT._status === 'conectando') BOT._iniciarPolling();
+    });
   },
 };
+
+// =============================================
+// BOT WHATSAPP
+// =============================================
+const BOT = {
+  _status: 'desconectado',
+  _qr: null,
+  _timer: null,
+
+  async verificarStatus() {
+    try {
+      const r = await fetch(API_URL + '/api/wpp/status');
+      const d = await r.json();
+      BOT._status = d.status;
+      BOT._qr = d.qr;
+      return d;
+    } catch { return { status: 'desconectado', qr: null }; }
+  },
+
+  async conectar() {
+    botStatusEl('🟡 Conectando...');
+    await fetch(API_URL + '/api/wpp/conectar', { method: 'POST' });
+    BOT._iniciarPolling();
+  },
+
+  async desconectar() {
+    if (!confirm('Desconectar o bot do WhatsApp? Precisará escanear o QR novamente para reconectar.')) return;
+    await fetch(API_URL + '/api/wpp/desconectar', { method: 'POST' });
+    BOT._status = 'desconectado'; BOT._qr = null;
+    BOT._pararPolling();
+    R._controle();
+  },
+
+  async listarGrupos() {
+    try {
+      const r = await fetch(API_URL + '/api/wpp/grupos-bot');
+      return await r.json();
+    } catch { return { ok: false, grupos: [] }; }
+  },
+
+  async vincularGrupo(grupoId, jid) {
+    await fetch(API_URL + `/api/grupos/${grupoId}/jid`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jid }),
+    });
+    const g = S.cache.grupos.find(x => x.id === grupoId);
+    if (g) g.jid = jid;
+  },
+
+  async enviarGrupos(grupos, mensagem) {
+    const targets = grupos.map(g => g.jid).filter(Boolean);
+    if (!targets.length) return { ok: false, error: 'sem_jid' };
+    try {
+      const r = await fetch(API_URL + '/api/wpp/enviar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targets, mensagem }),
+      });
+      return await r.json();
+    } catch (e) { return { ok: false, error: e.message }; }
+  },
+
+  _iniciarPolling() {
+    BOT._pararPolling();
+    BOT._timer = setInterval(async () => {
+      const d = await BOT.verificarStatus();
+      BOT._atualizarUI(d);
+      if (d.status === 'conectado') BOT._pararPolling();
+    }, 3500);
+  },
+
+  _pararPolling() {
+    if (BOT._timer) { clearInterval(BOT._timer); BOT._timer = null; }
+  },
+
+  _atualizarUI(d) {
+    const badge = $('bot-badge');
+    if (badge) badge.innerHTML = BOT._badgeHtml(d.status);
+    const qrEl = $('bot-qr-img');
+    if (qrEl) { if (d.qr) qrEl.src = d.qr; qrEl.hidden = !d.qr; }
+    const stEl = $('bot-status-txt');
+    if (stEl) stEl.innerHTML = BOT._statusHtml(d.status);
+    if ($('bot-btn-conectar')) $('bot-btn-conectar').hidden = (d.status !== 'desconectado');
+    if ($('bot-btn-descon'))   $('bot-btn-descon').hidden   = (d.status !== 'conectado');
+    if ($('bot-aviso-qr'))     $('bot-aviso-qr').hidden     = (d.status !== 'aguardando_qr');
+  },
+
+  _badgeHtml(s) {
+    return { conectado: '🟢 Bot ativo', aguardando_qr: '🟡 Scan QR', conectando: '🟡 Conectando...', desconectado: '🔴 Bot off' }[s] || '⚫';
+  },
+  _statusHtml(s) {
+    return {
+      conectado:     '<span style="color:var(--primary)">🟢 Conectado</span>',
+      aguardando_qr: '<span style="color:#f59e0b">🟡 Escaneie o QR Code abaixo</span>',
+      conectando:    '<span style="color:#f59e0b">🟡 Conectando...</span>',
+      desconectado:  '<span style="color:var(--red)">🔴 Desconectado</span>',
+    }[s] || '<span class="muted">—</span>';
+  },
+
+  async renderPainel() {
+    const d = await BOT.verificarStatus();
+    const gruposDB = DB.grupos.list();
+    const botGrps = d.status === 'conectado' ? (await BOT.listarGrupos()).grupos || [] : [];
+
+    const vinculacoes = gruposDB.length ? `
+      <div class="dev-panel mt12">
+        <h3>🔗 Vincular Grupos</h3>
+        <p class="muted txs mb12">Adicione o número do bot em cada grupo WhatsApp, depois selecione abaixo para vincular:</p>
+        ${gruposDB.map(gDB => `
+          <div class="card mb8" style="padding:12px">
+            <div style="font-weight:600;margin-bottom:4px">${gDB.nome}</div>
+            <div class="txs muted mb8">${gDB.jid ? `✅ Vinculado` : '⚪ Não vinculado'}</div>
+            <select onchange="BOT.vincularGrupo('${gDB.id}',this.value).then(()=>BOT.renderPainel().then(h=>{$('bot-wrap').innerHTML=h;}))"
+                    style="width:100%;font-size:.8rem;padding:6px;border-radius:8px;background:var(--card);color:var(--text);border:1px solid var(--border)">
+              <option value="">— Selecionar grupo do bot —</option>
+              ${botGrps.map(gb => `<option value="${gb.jid}" ${gDB.jid===gb.jid?'selected':''}>${gb.nome} (${gb.membros} membros)</option>`).join('')}
+            </select>
+          </div>`).join('')}
+      </div>` : '';
+
+    return `
+      <div class="dev-panel">
+        <h3>🤖 WhatsApp Bot</h3>
+        <div class="dev-row">
+          <span class="dev-lbl">Status</span>
+          <span id="bot-status-txt">${BOT._statusHtml(d.status)}</span>
+        </div>
+        <div id="bot-aviso-qr" class="ia-aviso mt8" ${d.status !== 'aguardando_qr' ? 'hidden' : ''}>
+          Abra o WhatsApp no chip → <strong>Dispositivos vinculados</strong> → <strong>Vincular dispositivo</strong> → aponte a câmera para o QR abaixo.
+        </div>
+        ${d.qr ? `<div class="tc mt12"><img id="bot-qr-img" src="${d.qr}" style="width:220px;height:220px;border-radius:12px;background:#fff;padding:8px"></div>`
+                : `<img id="bot-qr-img" src="" hidden>`}
+        <div class="fx fxg8 mt12">
+          <button id="bot-btn-conectar" class="btn btn-p" style="flex:1" ${d.status !== 'desconectado' ? 'hidden' : ''}
+                  onclick="BOT.conectar()">Conectar Bot</button>
+          <button id="bot-btn-descon" class="btn btn-d" style="flex:1" ${d.status !== 'conectado' ? 'hidden' : ''}
+                  onclick="BOT.desconectar()">Desconectar</button>
+        </div>
+        ${(d.status==='aguardando_qr'||d.status==='conectando') ? '<p class="muted txs tc mt8">Atualizando a cada 3,5s...</p>' : ''}
+      </div>
+      ${vinculacoes}`;
+  },
+};
+function botStatusEl(t) { const e=$('bot-status-txt'); if(e) e.innerHTML=t; }
 
 // =============================================
 // WHATSAPP MANAGER
@@ -1538,6 +1693,7 @@ const WPP = {
     if(WPP._dest==='todos') {
       const gs = DB.grupos.list().filter(g=>g.ativo);
       if(!gs.length){ alert('Nenhum grupo cadastrado.'); return; }
+      if(BOT._status==='conectado'){ WPP._enviarViaBot(gs); return; }
       WPP._grupos=gs; WPP._passo=0; WPP._step(); return;
     }
 
@@ -1547,12 +1703,59 @@ const WPP = {
         ? todos.filter(g=>WPP._selGrupos.includes(g.id))
         : todos;
       if(!gs.length){ alert('Selecione ao menos um grupo.'); return; }
+      if(BOT._status==='conectado'){ WPP._enviarViaBot(gs); return; }
       WPP._grupos=gs; WPP._passo=0; WPP._step(); return;
     }
 
-    // Envio por participante
+    // Envio por participante (sempre manual — mais pessoal)
     if(!WPP._selParts.length){ alert('Selecione ao menos um participante.'); return; }
     WPP._enviarPartes(0);
+  },
+
+  async _enviarViaBot(gs) {
+    const semJid = gs.filter(g => !g.jid);
+    const comJid = gs.filter(g =>  g.jid);
+
+    if (!comJid.length) {
+      const ok = confirm(
+        `⚠️ Nenhum grupo está vinculado ao bot ainda.\n\n` +
+        `Configure em: Painel Dev → WhatsApp Bot → Vincular Grupos.\n\n` +
+        `Deseja enviar manualmente agora?`
+      );
+      if (ok) { WPP._grupos=gs; WPP._passo=0; WPP._step(); }
+      return;
+    }
+
+    MODAL.open(`
+      <div class="m-title">🤖 Enviando via Bot</div>
+      <div class="loading mt16 mb8"><div class="spinner"></div></div>
+      <p class="tc muted">Enviando para <strong>${comJid.length}</strong> grupo${comJid.length!==1?'s':''}...</p>
+      <p class="tc txs muted">Aguarde ~${comJid.length * 3}s (intervalo de segurança entre envios)</p>
+      ${semJid.length ? `<div class="ia-aviso mt12">⚠️ ${semJid.length} grupo${semJid.length>1?'s':''} sem vínculo ignorados: ${semJid.map(g=>g.nome).join(', ')}</div>` : ''}
+    `);
+
+    const res = await BOT.enviarGrupos(comJid, WPP._msg);
+
+    if (!res.ok) {
+      MODAL.open(`
+        <div class="m-title">❌ Erro no envio</div>
+        <p class="tc muted mt8">${res.error || 'Falha na comunicação com o bot.'}</p>
+        <button class="btn btn-p btn-f mt16" onclick="MODAL.close()">Fechar</button>
+      `);
+      return;
+    }
+
+    const ok  = (res.resultados||[]).filter(r=>r.ok).length;
+    const err = (res.resultados||[]).filter(r=>!r.ok).length;
+    WPP._rotacionarFrase();
+
+    MODAL.open(`
+      <div class="m-title">✅ Envio Concluído!</div>
+      <div class="tc" style="font-size:2.8rem;margin:12px 0">🎉</div>
+      <p class="tc" style="font-size:1.1rem"><strong>${ok}</strong> grupo${ok!==1?'s':''} receberam a mensagem</p>
+      ${err ? `<p class="tc muted txs mt4">${err} falha${err>1?'s':''} de envio</p>` : ''}
+      <button class="btn btn-p btn-f mt16" onclick="MODAL.close()">Fechar</button>
+    `);
   },
 
   _enviarPartes(i) {
@@ -1738,9 +1941,121 @@ const DEV = {
 };
 
 // =============================================
+// TEMA — sistema de temas sazonais
+// =============================================
+const TEMA = {
+  _key: 'ltr_tema',
+  _partsAtivas: [],
+
+  atual() { return localStorage.getItem(this._key) || 'padrao'; },
+
+  aplicar(id) {
+    const t = TEMAS[id] || TEMAS.padrao;
+    document.body.setAttribute('data-tema', t.id);
+    localStorage.setItem(this._key, t.id);
+    this._pararParticulas();
+    this._atualizarFaixa(t);
+    if (t.decos.length) this._iniciarParticulas(t);
+    this._atualizarMetaColor(t.cores.bg2);
+    if (S.user?.role) R.ir('admin');
+  },
+
+  carregar() {
+    const t = TEMAS[this.atual()] || TEMAS.padrao;
+    document.body.setAttribute('data-tema', t.id);
+    this._atualizarFaixa(t);
+    this._atualizarMetaColor(t.cores.bg2);
+    if (t.decos.length) this._iniciarParticulas(t);
+  },
+
+  _atualizarMetaColor(cor) {
+    const m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.setAttribute('content', cor);
+  },
+
+  _atualizarFaixa(t) {
+    const el = document.getElementById('faixa-tema');
+    if (!el) return;
+    if (t.id === 'padrao') {
+      el.hidden = true;
+      document.body.classList.remove('tem-faixa');
+      return;
+    }
+    el.innerHTML = `
+      <span class="ft-emoji">${t.emoji}</span>
+      <span class="ft-nome">${t.nome}</span>
+      <span class="ft-sep">·</span>
+      <span class="ft-desc">${t.desc}</span>`;
+    el.style.background  = `linear-gradient(90deg, ${t.cores.bg3} 0%, ${t.cores.bg2} 40%, ${t.cores.bg2} 60%, ${t.cores.bg3} 100%)`;
+    el.style.color       = t.cores.primary;
+    el.hidden = false;
+    document.body.classList.add('tem-faixa');
+  },
+
+  _iniciarParticulas(t) {
+    const zona = document.getElementById('deco-tema');
+    if (!zona) return;
+    zona.innerHTML = '';
+    this._partsAtivas = [];
+    const { decos, id } = t;
+    // neve/pétalas usam animação de queda; outros sobem
+    const usaQueda  = ['natal','maes','pascoa'].includes(id);
+    const anims     = usaQueda ? ['anim-d','anim-d','anim-c'] : ['anim-a','anim-a','anim-b','anim-c'];
+    const qt        = 35;
+    const tamanhos  = ['.9rem','1.1rem','1.4rem','1.7rem','2rem'];
+    const duracoes  = usaQueda
+      ? [10,12,14,16,18,20]
+      : [5,6,7,8,9,10,11];
+    for (let i = 0; i < qt; i++) {
+      const el = document.createElement('span');
+      const anim = anims[i % anims.length];
+      el.className = `deco-p ${anim}`;
+      el.textContent = decos[i % decos.length];
+      el.style.left   = (Math.random() * 96 + 1) + '%';
+      el.style.fontSize = tamanhos[Math.floor(Math.random() * tamanhos.length)];
+      el.style.animationDuration = duracoes[Math.floor(Math.random() * duracoes.length)] + 's';
+      el.style.animationDelay    = (Math.random() * 12) + 's';
+      if (usaQueda) el.style.bottom = 'auto';
+      zona.appendChild(el);
+      this._partsAtivas.push(el);
+    }
+  },
+
+  _pararParticulas() {
+    const zona = document.getElementById('deco-tema');
+    if (zona) zona.innerHTML = '';
+    this._partsAtivas = [];
+  },
+
+  renderSeletor() {
+    const atual = this.atual();
+    return `
+      <div class="divider mt12 mb12"></div>
+      <div class="fxb mb10">
+        <div class="sectt">🎨 Tema Visual</div>
+        <div class="txs muted">${TEMAS[atual]?.emoji || '🎰'} ${TEMAS[atual]?.nome || 'Padrão'}</div>
+      </div>
+      <div class="tema-grid">
+        ${Object.values(TEMAS).map(t => `
+          <div class="tema-card${t.id === atual ? ' ativo' : ''}" onclick="TEMA.aplicar('${t.id}')">
+            <span class="tema-card-emoji">${t.emoji}</span>
+            <div class="tema-card-nome">${t.nome}</div>
+            <div class="tema-card-desc">${t.desc}</div>
+            <div class="tema-card-cores">
+              <span class="tema-dot" style="background:${t.cores.bg2}"></span>
+              <span class="tema-dot" style="background:${t.cores.primary}"></span>
+              <span class="tema-dot" style="background:${t.cores.gold}"></span>
+            </div>
+          </div>`).join('')}
+      </div>`;
+  },
+};
+
+// =============================================
 // INICIALIZAÇÃO
 // =============================================
 document.addEventListener('DOMContentLoaded', () => {
+  TEMA.carregar();
   setTimeout(()=>{
     $('splash').classList.add('hide');
     setTimeout(()=>{
