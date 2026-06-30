@@ -637,6 +637,205 @@ input:checked + .sl2::before { transform: translateX(19px); }
 }
 
 /* ============================================
+   TEMAS SAZONAIS — variáveis por data-tema
+   ============================================ */
+
+body[data-tema="mega_virada"]   { --bg:#08080f; --bg2:#101026; --bg3:#18183a; --primary:#FFD700; --gold:#ff9500; --border:#2a2a55; }
+body[data-tema="sao_joao"]      { --bg:#180400; --bg2:#2a0800; --bg3:#3d0e00; --primary:#FF6B00; --gold:#FFD700; --border:#5a1a00; }
+body[data-tema="pascoa"]        { --bg:#14072a; --bg2:#1e0d3d; --bg3:#2a1250; --primary:#c45af5; --gold:#f5c45a; --border:#3d1a65; }
+body[data-tema="independencia"] { --bg:#001a00; --bg2:#002600; --bg3:#003300; --primary:#00d45a; --gold:#FFD700; --border:#006600; }
+body[data-tema="natal"]         { --bg:#0a160a; --bg2:#0f220f; --bg3:#152e15; --primary:#2ecc71; --gold:#FFD700; --border:#1a5a1a; }
+body[data-tema="maes"]          { --bg:#18060f; --bg2:#2a0c1c; --bg3:#3d1228; --primary:#ff5f9e; --gold:#ffb3d1; --border:#5a1a35; }
+body[data-tema="pais"]          { --bg:#080c1a; --bg2:#0d1226; --bg3:#121832; --primary:#3b82f6; --gold:#f59e0b; --border:#1e2d55; }
+body[data-tema="criancas"]      { --bg:#08081a; --bg2:#0f0f2a; --bg3:#15153a; --primary:#ff9f00; --gold:#ff5252; --border:#2a1a45; }
+body[data-tema="copa"]          { --bg:#001000; --bg2:#001800; --bg3:#002000; --primary:#FFDD00; --gold:#00c851; --border:#003800; }
+
+/* ── Overlay gradiente de fundo ── */
+body[data-tema="mega_virada"]::before   { content:''; position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 50% 110%, rgba(255,215,0,.13) 0%, transparent 60%), radial-gradient(ellipse at 20% 80%, rgba(255,149,0,.06) 0%, transparent 50%); }
+body[data-tema="sao_joao"]::before      { content:''; position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 50% 110%, rgba(255,107,0,.15) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(255,215,0,.07) 0%, transparent 50%); }
+body[data-tema="pascoa"]::before        { content:''; position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 50% 110%, rgba(196,90,245,.12) 0%, transparent 60%), radial-gradient(ellipse at 80% 10%, rgba(245,196,90,.06) 0%, transparent 50%); }
+body[data-tema="independencia"]::before { content:''; position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 50% 110%, rgba(0,212,90,.12) 0%, transparent 60%),  radial-gradient(ellipse at 10% 10%, rgba(255,215,0,.06) 0%, transparent 50%); }
+body[data-tema="natal"]::before         { content:''; position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 50% -10%,  rgba(255,0,0,.07)  0%, transparent 60%), radial-gradient(ellipse at 50% 110%, rgba(46,204,113,.1) 0%, transparent 60%); }
+body[data-tema="maes"]::before          { content:''; position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 50% 110%, rgba(255,95,158,.13) 0%, transparent 60%), radial-gradient(ellipse at 90% 5%,   rgba(255,179,209,.06) 0%, transparent 50%); }
+body[data-tema="pais"]::before          { content:''; position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 50% 110%, rgba(59,130,246,.12) 0%, transparent 60%), radial-gradient(ellipse at 10% 10%, rgba(245,158,11,.05) 0%, transparent 50%); }
+body[data-tema="criancas"]::before      { content:''; position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 30% 110%, rgba(255,159,0,.1) 0%, transparent 50%),  radial-gradient(ellipse at 70% 110%, rgba(255,82,82,.1)  0%, transparent 50%); }
+body[data-tema="copa"]::before          { content:''; position:fixed; inset:0; pointer-events:none; z-index:0; background: radial-gradient(ellipse at 50% 110%, rgba(255,221,0,.12) 0%, transparent 60%), radial-gradient(ellipse at 50% 0%,   rgba(0,200,81,.06)  0%, transparent 50%); }
+
+/* ── Brilho pulsante no header e nav por tema ── */
+@keyframes headerGlow { 0%,100%{opacity:.7} 50%{opacity:1} }
+
+body[data-tema="mega_virada"] #header,body[data-tema="mega_virada"] #nav-admin,body[data-tema="mega_virada"] #nav-user { box-shadow: 0 0 28px rgba(255,215,0,.35); border-color: rgba(255,215,0,.3); animation: headerGlow 2.5s ease-in-out infinite; }
+body[data-tema="sao_joao"]    #header,body[data-tema="sao_joao"]    #nav-admin,body[data-tema="sao_joao"]    #nav-user { box-shadow: 0 0 28px rgba(255,107,0,.4);  border-color: rgba(255,107,0,.35); animation: headerGlow 2s   ease-in-out infinite; }
+body[data-tema="pascoa"]      #header,body[data-tema="pascoa"]      #nav-admin,body[data-tema="pascoa"]      #nav-user { box-shadow: 0 0 28px rgba(196,90,245,.35); border-color: rgba(196,90,245,.3); animation: headerGlow 3s   ease-in-out infinite; }
+body[data-tema="independencia"] #header,body[data-tema="independencia"] #nav-admin,body[data-tema="independencia"] #nav-user { box-shadow: 0 0 28px rgba(0,212,90,.35);  border-color: rgba(0,212,90,.3); animation: headerGlow 2.5s ease-in-out infinite; }
+body[data-tema="natal"]       #header,body[data-tema="natal"]       #nav-admin,body[data-tema="natal"]       #nav-user { box-shadow: 0 0 28px rgba(255,30,30,.3);   border-color: rgba(255,30,30,.25); animation: headerGlow 3s   ease-in-out infinite; }
+body[data-tema="maes"]        #header,body[data-tema="maes"]        #nav-admin,body[data-tema="maes"]        #nav-user { box-shadow: 0 0 28px rgba(255,95,158,.35); border-color: rgba(255,95,158,.3); animation: headerGlow 2.8s ease-in-out infinite; }
+body[data-tema="pais"]        #header,body[data-tema="pais"]        #nav-admin,body[data-tema="pais"]        #nav-user { box-shadow: 0 0 28px rgba(59,130,246,.35); border-color: rgba(59,130,246,.3); animation: headerGlow 2.5s ease-in-out infinite; }
+body[data-tema="criancas"]    #header,body[data-tema="criancas"]    #nav-admin,body[data-tema="criancas"]    #nav-user { box-shadow: 0 0 28px rgba(255,159,0,.35); border-color: rgba(255,159,0,.3); animation: headerGlow 1.8s ease-in-out infinite; }
+body[data-tema="copa"]        #header,body[data-tema="copa"]        #nav-admin,body[data-tema="copa"]        #nav-user { box-shadow: 0 0 28px rgba(255,221,0,.35); border-color: rgba(255,221,0,.3); animation: headerGlow 2s   ease-in-out infinite; }
+
+/* ── Logo com halo temático ── */
+@keyframes logoHalo { 0%,100%{box-shadow:0 0 12px 3px var(--primary)} 50%{box-shadow:0 0 22px 6px var(--primary)} }
+body[data-tema]:not([data-tema="padrao"]) .h-logo-img { animation: logoHalo 2.5s ease-in-out infinite; }
+
+/* ── Faixa temática abaixo do header ── */
+#faixa-tema {
+  position: fixed;
+  top: var(--hh);
+  left: 0; right: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: .75rem;
+  font-weight: 700;
+  letter-spacing: .4px;
+  z-index: 99;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+#faixa-tema .ft-emoji { font-size: 1rem; }
+#faixa-tema .ft-nome  { opacity: .95; }
+#faixa-tema .ft-desc  { opacity: .55; font-weight: 500; font-size: .68rem; }
+#faixa-tema .ft-sep   { opacity: .3; }
+body.tem-faixa #main  { margin-top: calc(var(--hh) + 32px); }
+
+/* Efeito de brilho deslizante na faixa */
+#faixa-tema::after {
+  content: '';
+  position: absolute; top:0; left:-100%; width:60%; height:100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.12), transparent);
+  animation: faixaShine 3s linear infinite;
+}
+@keyframes faixaShine { to { left: 200%; } }
+
+/* São João — bandeirinhas triangulares no topo */
+body[data-tema="sao_joao"] #faixa-tema::before {
+  content: '';
+  position: absolute; top:0; left:0; right:0; height:5px;
+  background: repeating-linear-gradient(
+    90deg,
+    #FF6B00 0px, #FF6B00 16px,
+    #FFD700 16px, #FFD700 32px,
+    #ff2020 32px, #ff2020 48px,
+    #9b00ff 48px, #9b00ff 64px,
+    #00a550 64px, #00a550 80px
+  );
+}
+
+/* Natal — faixa listrada vermelho/verde */
+body[data-tema="natal"] #faixa-tema::before {
+  content: '';
+  position: absolute; top:0; left:0; right:0; height:4px;
+  background: repeating-linear-gradient(
+    90deg,
+    #cc0000 0px, #cc0000 20px,
+    #00a550 20px, #00a550 40px
+  );
+}
+
+/* Copa — faixa verde/amarelo */
+body[data-tema="copa"] #faixa-tema::before {
+  content: '';
+  position: absolute; top:0; left:0; right:0; height:4px;
+  background: repeating-linear-gradient(
+    90deg,
+    #009c3b 0px, #009c3b 24px,
+    #FFDD00 24px, #FFDD00 48px
+  );
+}
+
+/* Independência — faixa verde/amarelo/azul */
+body[data-tema="independencia"] #faixa-tema::before {
+  content: '';
+  position: absolute; top:0; left:0; right:0; height:4px;
+  background: repeating-linear-gradient(
+    90deg,
+    #009c3b 0px, #009c3b 20px,
+    #FFDD00 20px, #FFDD00 40px,
+    #003087 40px, #003087 60px
+  );
+}
+
+/* ── Partículas flutuantes — 4 animações diferentes ── */
+#deco-tema { position:fixed; inset:0; pointer-events:none; z-index:1; overflow:hidden; }
+
+.deco-p { position:absolute; bottom:-80px; user-select:none; opacity:0; }
+
+/* Flutuação simples */
+.deco-p.anim-a { animation: decoA linear infinite; }
+@keyframes decoA {
+  0%   { transform: translateY(0) rotate(0deg) scale(.7);   opacity:0; }
+  7%   { opacity:.8; }
+  85%  { opacity:.4; }
+  100% { transform: translateY(-115vh) rotate(480deg) scale(1.2); opacity:0; }
+}
+/* Zigzag */
+.deco-p.anim-b { animation: decoB ease-in-out infinite; }
+@keyframes decoB {
+  0%   { transform: translate(0,0)     rotate(0deg);   opacity:0; }
+  6%   { opacity:.75; }
+  25%  { transform: translate(25px,-30vh)  rotate(90deg); }
+  50%  { transform: translate(-20px,-60vh) rotate(200deg); }
+  75%  { transform: translate(20px,-85vh)  rotate(320deg); }
+  90%  { opacity:.3; }
+  100% { transform: translate(-10px,-115vh) rotate(420deg); opacity:0; }
+}
+/* Espiral */
+.deco-p.anim-c { animation: decoC linear infinite; }
+@keyframes decoC {
+  0%   { transform: translateY(0) translateX(0)   scale(.6) rotate(0deg);   opacity:0; }
+  8%   { opacity:.9; }
+  30%  { transform: translateY(-35vh) translateX(20px)  scale(.9) rotate(120deg); }
+  60%  { transform: translateY(-65vh) translateX(-20px) scale(1.1) rotate(260deg); }
+  90%  { opacity:.3; }
+  100% { transform: translateY(-115vh) translateX(10px) scale(.7) rotate(400deg); opacity:0; }
+}
+/* Queda lenta (neve/pétalas) */
+.deco-p.anim-d { animation: decoD ease-in-out infinite; }
+@keyframes decoD {
+  0%   { transform: translateY(-10vh) translateX(0) rotate(0deg) scale(1.1);   opacity:0; }
+  5%   { opacity:.7; }
+  50%  { transform: translateY(50vh) translateX(30px)  rotate(180deg) scale(.9); }
+  90%  { opacity:.4; }
+  100% { transform: translateY(115vh) translateX(-15px) rotate(360deg) scale(.7); opacity:0; }
+}
+
+/* ── Seletor de tema (painel admin) ── */
+.tema-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+.tema-card {
+  border: 2px solid var(--border);
+  border-radius: var(--rsm);
+  padding: 10px 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s, transform .15s, box-shadow .2s;
+  background: var(--bg3);
+  position: relative;
+  overflow: hidden;
+}
+.tema-card:hover  { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.4); }
+.tema-card:active { transform: scale(.95); }
+.tema-card.ativo  { border-color: var(--primary); box-shadow: 0 0 12px rgba(255,255,255,.1); }
+.tema-card.ativo::after {
+  content: '✓';
+  position: absolute; top:5px; right:7px;
+  font-size: .65rem; font-weight: 800;
+  color: var(--primary);
+}
+.tema-card-emoji  { font-size: 2rem; display: block; margin-bottom: 5px; filter: drop-shadow(0 2px 4px rgba(0,0,0,.4)); }
+.tema-card-nome   { font-size: .68rem; font-weight: 700; color: var(--text); line-height: 1.2; margin-bottom: 2px; }
+.tema-card-desc   { font-size: .6rem;  color: var(--muted); line-height: 1.2; }
+.tema-card-cores  { display: flex; gap: 3px; justify-content: center; margin-top: 7px; }
+.tema-dot { width:11px; height:11px; border-radius:50%; box-shadow: 0 1px 3px rgba(0,0,0,.5); }
+
+/* ============================================
    RESPONSIVO — DESKTOP (≥ 1100px)
    ============================================ */
 @media (min-width: 1100px) {

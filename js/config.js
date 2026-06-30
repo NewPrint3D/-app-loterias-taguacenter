@@ -36,6 +36,20 @@ const FRASES_ZE = [
   'Kkk não gaste o prêmio antes de ganhar! 💸',
 ];
 
+// ─── TEMAS SAZONAIS ────────────────────────────────────────────────────────
+const TEMAS = {
+  padrao:        { id:'padrao',        nome:'Padrão',                     emoji:'🎰', desc:'Tema original do app',         decos:[], cores:{ bg:'#0f172a', bg2:'#1e293b', bg3:'#273449', primary:'#10b981', gold:'#f59e0b', border:'#334155' } },
+  mega_virada:   { id:'mega_virada',   nome:'Mega da Virada',             emoji:'🎆', desc:'31 de Dezembro · Ano Novo',    decos:['✨','🎆','🎇','🥂','🎊','⭐'], cores:{ bg:'#08080f', bg2:'#101026', bg3:'#18183a', primary:'#FFD700', gold:'#ff9500', border:'#2a2a55' } },
+  sao_joao:      { id:'sao_joao',      nome:'Quina de São João',          emoji:'🎪', desc:'Festa Junina · Junho',          decos:['🎪','🌽','🔥','⭐','🎊','🎆'], cores:{ bg:'#180400', bg2:'#2a0800', bg3:'#3d0e00', primary:'#FF6B00', gold:'#FFD700', border:'#5a1a00' } },
+  pascoa:        { id:'pascoa',        nome:'Mega de Páscoa',             emoji:'🐣', desc:'Semana Santa · Março/Abril',   decos:['🐣','🌸','🥚','🌷','🐰','💐'], cores:{ bg:'#14072a', bg2:'#1e0d3d', bg3:'#2a1250', primary:'#c45af5', gold:'#f5c45a', border:'#3d1a65' } },
+  independencia: { id:'independencia', nome:'Lotofácil Independência',    emoji:'🇧🇷', desc:'7 de Setembro',               decos:['🇧🇷','⭐','🌿','💚','🌟','🎯'], cores:{ bg:'#001a00', bg2:'#002600', bg3:'#003300', primary:'#00d45a', gold:'#FFD700', border:'#006600' } },
+  natal:         { id:'natal',         nome:'Natal',                      emoji:'🎄', desc:'Dezembro · Feliz Natal',       decos:['🎄','❄️','⭐','🎁','🔔','🦌'], cores:{ bg:'#0a160a', bg2:'#0f220f', bg3:'#152e15', primary:'#2ecc71', gold:'#FFD700', border:'#1a5a1a' } },
+  maes:          { id:'maes',          nome:'Mega Dia das Mães',          emoji:'🌸', desc:'Segundo Domingo de Maio',      decos:['🌸','💕','🌹','🌷','💐','🥰'], cores:{ bg:'#18060f', bg2:'#2a0c1c', bg3:'#3d1228', primary:'#ff5f9e', gold:'#ffb3d1', border:'#5a1a35' } },
+  pais:          { id:'pais',          nome:'Mega Dia dos Pais',          emoji:'👔', desc:'Segundo Domingo de Agosto',    decos:['👔','⭐','🏆','💪','🎯','🥃'], cores:{ bg:'#080c1a', bg2:'#0d1226', bg3:'#121832', primary:'#3b82f6', gold:'#f59e0b', border:'#1e2d55' } },
+  criancas:      { id:'criancas',      nome:'Mega Dia das Crianças',      emoji:'🎈', desc:'12 de Outubro',                decos:['🎈','🎠','🍭','🎊','🎡','🌈'], cores:{ bg:'#08081a', bg2:'#0f0f2a', bg3:'#15153a', primary:'#ff9f00', gold:'#ff5252', border:'#2a1a45' } },
+  copa:          { id:'copa',          nome:'Copa / Timemania',           emoji:'⚽', desc:'Temporada de Futebol',         decos:['⚽','🏆','🌟','🥅','📣','🎯'], cores:{ bg:'#001000', bg2:'#001800', bg3:'#002000', primary:'#FFDD00', gold:'#00c851', border:'#003800' } },
+};
+
 const MOCK = {
   megasena: [
     { numero:2780, data:'09/11/2024', dezenas:['04','11','23','38','51','59'], acumulado:false, ganhadores:2,  premio:45000000 },
