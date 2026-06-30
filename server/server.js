@@ -340,6 +340,22 @@ app.get('/api/wpp/status', (req, res) => {
   res.json({ status: botStatus, qr: botQr });
 });
 
+app.get('/api/wpp/qr', (req, res) => {
+  if (!botQr) {
+    return res.send(`<html><body style="background:#0d1117;color:#fff;font-family:sans-serif;text-align:center;padding:40px">
+      <h2>Status: ${botStatus}</h2>
+      <p>QR ainda não disponível. Aguarde e <a href="/api/wpp/qr" style="color:#4ade80">recarregue</a>.</p>
+    </body></html>`);
+  }
+  res.send(`<html><body style="background:#0d1117;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0">
+    <p style="color:#fff;font-family:sans-serif;margin-bottom:16px;font-size:1.1rem">📱 WhatsApp → Dispositivos vinculados → Vincular dispositivo</p>
+    <img src="${botQr}" style="width:280px;height:280px;border-radius:12px;background:#fff;padding:8px">
+    <p style="color:#888;font-family:sans-serif;font-size:12px;margin-top:16px">
+      Status: ${botStatus} · <a href="/api/wpp/qr" style="color:#4ade80">Atualizar QR</a>
+    </p>
+  </body></html>`);
+});
+
 app.post('/api/wpp/conectar', (req, res) => {
   if (botStatus === 'conectado') return res.json({ ok: true, msg: 'Já conectado' });
   if (botStatus === 'conectando' || botStatus === 'aguardando_qr')
