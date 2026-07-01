@@ -1686,9 +1686,10 @@ const WPP = {
   },
   // ---- ESTADO DE DESTINO ----
   _dest: 'todos',   // 'todos' | 'grupos' | 'pessoa'
-  _selGrupos: [],   // ids dos grupos selecionados
-  _selParts: [],    // objetos {nome, fone, grupo, pago} selecionados
+  _selGrupos: [],
+  _selParts: [],
   _volantePago: false,
+  _pendingImport: [],
   _passo: 0, _grupos: [],
 
   // ---- SELETOR DE DESTINATÁRIOS ----
@@ -1820,10 +1821,10 @@ const WPP = {
       });
     });
 
-    const todos = Object.values(mapaFone);
+    WPP._pendingImport = Object.values(mapaFone);
     const erros = resultados.filter(r=>r.erro);
 
-    if (!todos.length) {
+    if (!WPP._pendingImport.length) {
       MODAL.open(`<div class="m-title">⚠️ Sem participantes</div>
         <p class="tc muted">${erros.length ? 'Erro: '+erros.map(e=>e.grupo+': '+e.erro).join('<br>') : 'Nenhum participante encontrado nos grupos.'}</p>
         <button class="btn btn-p btn-f mt12" onclick="MODAL.close()">Fechar</button>`);
@@ -1831,26 +1832,27 @@ const WPP = {
     }
 
     MODAL.open(`
-      <div class="m-title">📱 Participantes dos grupos (${todos.length})</div>
+      <div class="m-title">📱 Participantes (${WPP._pendingImport.length})</div>
       <p class="muted txs mb12">Preencha o nome de cada participante. Deixe em branco para pular.</p>
       <div style="max-height:55vh;overflow-y:auto">
-        ${todos.map((p,i)=>`
+        ${WPP._pendingImport.map((p,i)=>`
           <div class="fr mb8" style="align-items:center;gap:8px">
             <input type="checkbox" id="wpi-${i}" checked>
             <div style="flex:1">
               <input type="text" id="wpn-${i}" placeholder="Nome do participante"
                      style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
-              <div class="txs muted">📱 +${p.fone} · ${p.grupos.join(', ')}</div>
+              <div class="txs muted">📱 +${p.fone}</div>
             </div>
           </div>`).join('')}
       </div>
       ${erros.length ? `<div class="txs" style="color:var(--red);margin-top:8px">⚠️ Erro em: ${erros.map(e=>e.grupo).join(', ')}</div>` : ''}
-      <button class="btn btn-p btn-f mt12" onclick="WPP._salvarImportadosWPP(${JSON.stringify(todos).replace(/</g,'&lt;')})">✅ Cadastrar selecionados</button>
+      <button class="btn btn-p btn-f mt12" onclick="WPP._salvarImportadosWPP()">✅ Cadastrar selecionados</button>
       <button class="btn btn-o btn-f mt8" onclick="MODAL.close()">Cancelar</button>
     `);
   },
 
-  _salvarImportadosWPP(todos) {
+  _salvarImportadosWPP() {
+    const todos = WPP._pendingImport || [];
     let ok=0, dup=0;
     todos.forEach((p,i) => {
       if (!document.getElementById(`wpi-${i}`)?.checked) return;
@@ -1860,6 +1862,7 @@ const WPP = {
       DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() });
       ok++;
     });
+    WPP._pendingImport = [];
     MODAL.close();
     alert(`${ok} participante${ok!==1?'s':''} cadastrado${ok!==1?'s':''}!${dup?` (${dup} já existia${dup!==1?'m':''})`:''}`);
     WPP._renderParts('');
