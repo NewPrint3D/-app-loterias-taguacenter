@@ -373,6 +373,23 @@ app.post('/api/wpp/desconectar', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/wpp/participantes/:jid', async (req, res) => {
+  if (!botSock || botStatus !== 'conectado')
+    return res.status(503).json({ ok: false, error: 'Bot não conectado. Conecte o bot no Painel Dev.' });
+  try {
+    const jid = decodeURIComponent(req.params.jid);
+    const meta = await botSock.groupMetadata(jid);
+    const participantes = meta.participants.map(p => ({
+      jid: p.id,
+      fone: p.id.replace('@s.whatsapp.net', '').replace(/\D/g, ''),
+      admin: !!(p.admin),
+    }));
+    res.json({ ok: true, nome: meta.subject, participantes });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/api/wpp/grupos-bot', async (req, res) => {
   if (!botSock || botStatus !== 'conectado') return res.json({ ok: false, grupos: [] });
   try {

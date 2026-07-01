@@ -874,38 +874,71 @@ const R = {
       ${TEMA.renderSeletor()}`;
   },
 
-  // ---- USUÁRIOS (admin) ----
+  // ---- USUÁRIOS (admin) — integrado com bolões e WhatsApp ----
   _usuarios() {
     if(!AUTH.isAdmin()){R.ir('home');return;}
-    $('h-title').textContent='Usuários';
-    const us=DB.usuarios.list();
+    $('h-title').textContent='Apostadores';
+
+    // Coleta todos apostadores únicos de bolões
+    const mapa = {};
+    S.cache.boloes.forEach(b => {
+      (b.membros||[]).forEach(m => {
+        const k = m.nome.trim().toLowerCase();
+        if (!mapa[k]) mapa[k] = { nome: m.nome, fone: m.fone||'', grupos: [], noApp: false };
+        if (b.grupo && !mapa[k].grupos.includes(b.grupo)) mapa[k].grupos.push(b.grupo);
+        if (m.fone && !mapa[k].fone) mapa[k].fone = m.fone;
+      });
+    });
+
+    // Marca quem já está registrado no app
+    DB.usuarios.list().forEach(u => {
+      const k = u.nome.trim().toLowerCase();
+      if (mapa[k]) { mapa[k].noApp=true; mapa[k]._id=u.id; mapa[k].ativo=u.ativo; }
+      else mapa[k] = { nome:u.nome, fone:'', grupos:[], noApp:true, _id:u.id, ativo:u.ativo };
+    });
+
+    const todos = Object.values(mapa).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
+    const soBolao = todos.filter(t=>!t.noApp);
+
     $('view-usuarios').innerHTML=`
       <div class="fxb mb12">
-        <div class="sectt">Apostadores registrados</div>
+        <div class="sectt">Apostadores (${todos.length})</div>
         <button class="btn btn-p btn-sm" onclick="R._mNovoUser()">+ Adicionar</button>
       </div>
+      ${soBolao.length ? `<div class="ia-aviso mb12">
+        ⚠️ <strong>${soBolao.length}</strong> apostador${soBolao.length>1?'es':''} em bolões sem acesso ao app.
+        <br><button class="btn btn-p btn-sm mt8" onclick="R._registrarTodos()">✅ Registrar todos no app</button>
+      </div>` : ''}
       <div class="card">
-        ${!us.length
-          ? '<div class="empty"><div class="ei">👥</div><p>Nenhum usuário registrado.</p></div>'
-          : us.map(u=>`
+        ${!todos.length
+          ? '<div class="empty"><div class="ei">👥</div><p>Nenhum apostador encontrado.</p></div>'
+          : todos.map(t=>`
           <div class="user-card">
-            <div class="user-avatar">${u.nome[0].toUpperCase()}</div>
+            <div class="user-avatar" style="background:${t.noApp?'var(--primary)':'var(--border);color:var(--text)'}">${t.nome[0].toUpperCase()}</div>
             <div class="user-info">
-              <div class="user-nome">${u.nome}</div>
-              <div class="user-meta">Desde ${u.criado} · ${u.ativo?'<span style="color:var(--primary)">Ativo</span>':'<span style="color:var(--red)">Inativo</span>'}</div>
+              <div class="user-nome">${t.nome}
+                ${t.noApp
+                  ? `<span class="badge txs" style="background:${t.ativo?'var(--primary)':'var(--red)'};color:#fff;margin-left:6px">${t.ativo?'App ✓':'Inativo'}</span>`
+                  : `<span class="badge txs" style="background:var(--border);color:var(--muted);margin-left:6px">Só bolão</span>`}
+              </div>
+              <div class="user-meta txs muted">
+                ${t.fone?`📱 ${t.fone}`:''}${t.grupos.length?` · ${t.grupos.join(', ')}`:''}</div>
             </div>
             <div class="user-acts">
-              <button class="btn btn-o btn-sm" onclick="R._toggleUser('${u.id}')">${u.ativo?'Desativar':'Ativar'}</button>
-              <button class="btn btn-d btn-sm" onclick="R._delUser('${u.id}')">✕</button>
+              ${t.noApp
+                ? `<button class="btn btn-o btn-sm" onclick="R._toggleUser('${t._id}')">${t.ativo?'Desativar':'Ativar'}</button>
+                   <button class="btn btn-d btn-sm" onclick="R._delUser('${t._id}')">✕</button>`
+                : `<button class="btn btn-p btn-sm" onclick="R._registrarNaApp('${t.nome.replace(/'/g,"\\'").replace(/"/g,'\\"')}','${t.fone||''}')">Dar acesso</button>`}
             </div>
           </div>`).join('')}
       </div>
-      <div class="ia-aviso mt12">💡 Os apostadores entram no app digitando exatamente o nome cadastrado aqui. Apenas usuários ativos conseguem entrar.</div>`;
+      <div class="ia-aviso mt12">💡 <strong>App ✓</strong> = pode entrar no app digitando o nome. <strong>Só bolão</strong> = participa de bolões mas ainda não tem acesso. Clique "Dar acesso" para liberar.</div>`;
   },
 
   _mNovoUser() {
     MODAL.open(`<div class="m-title">👤 Novo Apostador</div>
       <div class="fg"><label>Nome completo</label><input id="mun" type="text" placeholder="Ex: João Silva" autocomplete="off"></div>
+      <div class="fg"><label>Telefone (opcional)</label><input id="mutel" type="tel" placeholder="61999887766"></div>
       <button class="btn btn-p btn-f" onclick="R._saveUser()">Cadastrar</button>`);
   },
   _saveUser() {
@@ -925,6 +958,65 @@ const R = {
     if(!confirm('Remover usuário?')) return;
     DB.usuarios.del(id); R._usuarios();
   },
+  _registrarNaApp(nome, fone) {
+    if (DB.usuarios.find(nome)) { alert('Já registrado.'); return; }
+    DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() });
+    R._usuarios();
+  },
+  _registrarTodos() {
+    const mapa = {};
+    S.cache.boloes.forEach(b => (b.membros||[]).forEach(m => { mapa[m.nome.trim().toLowerCase()] = m.nome; }));
+    const novos = Object.values(mapa).filter(n => !DB.usuarios.find(n));
+    if (!novos.length) { alert('Todos já estão registrados!'); return; }
+    if (!confirm(`Registrar ${novos.length} apostador${novos.length>1?'es':''} no app?`)) return;
+    novos.forEach(nome => DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() }));
+    R._usuarios();
+  },
+  async _importarWA(grupoId, jid) {
+    MODAL.open(`<div class="m-title">📱 Importar do WhatsApp</div><div class="loading mt16"><div class="spinner"></div></div><p class="tc muted mt8">Buscando participantes...</p>`);
+    try {
+      const r = await fetch(API_URL + `/api/wpp/participantes/${encodeURIComponent(jid)}`);
+      const d = await r.json();
+      if (!d.ok) {
+        MODAL.open(`<div class="m-title">❌ Erro</div><p class="tc muted">${d.error}</p><button class="btn btn-p btn-f mt12" onclick="MODAL.close()">Fechar</button>`);
+        return;
+      }
+      const parts = d.participantes;
+      MODAL.open(`
+        <div class="m-title">📱 ${d.nome} — ${parts.length} participantes</div>
+        <p class="muted txs mb12">Preencha o nome de cada participante e selecione quem importar:</p>
+        <div style="max-height:50vh;overflow-y:auto">
+          ${parts.map((p,i)=>`
+            <div class="fr mb8" style="align-items:center;gap:8px">
+              <input type="checkbox" id="pi-${i}" checked>
+              <div style="flex:1">
+                <input type="text" id="pn-${i}" placeholder="Nome do apostador"
+                       style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
+                <div class="txs muted">📱 +${p.fone}</div>
+              </div>
+            </div>`).join('')}
+        </div>
+        <button class="btn btn-p btn-f mt12" onclick="R._salvarImportados(${JSON.stringify(parts).replace(/</g,'&lt;').replace(/>/g,'&gt;')})">✅ Importar selecionados</button>
+        <button class="btn btn-o btn-f mt8" onclick="MODAL.close()">Cancelar</button>
+      `);
+    } catch(e) {
+      MODAL.open(`<div class="m-title">❌ Erro</div><p class="tc muted">${e.message}</p><button class="btn btn-p btn-f mt12" onclick="MODAL.close()">Fechar</button>`);
+    }
+  },
+  _salvarImportados(parts) {
+    let ok=0, dup=0;
+    parts.forEach((p,i) => {
+      if (!document.getElementById(`pi-${i}`)?.checked) return;
+      const nome = document.getElementById(`pn-${i}`)?.value?.trim();
+      if (!nome) return;
+      if (DB.usuarios.find(nome)) { dup++; return; }
+      DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() });
+      ok++;
+    });
+    MODAL.close();
+    alert(`${ok} apostador${ok!==1?'es':''} importado${ok!==1?'s':''}!${dup?` (${dup} já existia${dup!==1?'m':''})`:''}`);
+    R._usuarios();
+  },
 
   // ---- WHATSAPP ----
   _whatsapp() {
@@ -934,14 +1026,23 @@ const R = {
     $('view-whatsapp').innerHTML=`
       <div class="sectt mb12">Grupos cadastrados</div>
       <div id="lista-grp">
-        ${gs.length?gs.map(g=>`
+        ${gs.length?gs.map(g=>{
+          const ns=new Set();
+          S.cache.boloes.filter(b=>b.grupo===g.nome).forEach(b=>(b.membros||[]).forEach(m=>ns.add(m.nome.trim().toLowerCase())));
+          const cnt = ns.size || g.membros;
+          return `
           <div class="grp-card">
-            <div><div class="grp-nome">${g.nome}</div><div class="grp-meta">${g.membros} membros</div></div>
+            <div style="flex:1">
+              <div class="grp-nome">${g.nome} ${g.jid?'<span class="badge txs" style="background:var(--primary);color:#fff;font-size:.6rem">Bot ✓</span>':''}</div>
+              <div class="grp-meta">${cnt} apostador${cnt!==1?'es':''}</div>
+            </div>
             <div class="grp-acts">
+              ${g.jid?`<button class="btn btn-o btn-sm" onclick="R._importarWA('${g.id}','${g.jid}')">📱 Importar</button>`:''}
               <button class="btn-ico" onclick="R._mEditGrp('${g.id}')">✏️</button>
               <button class="btn-ico" onclick="R._delGrp('${g.id}')">🗑️</button>
             </div>
-          </div>`).join('')
+          </div>`;
+        }).join('')
           :`<div class="empty"><div class="ei">${WPP_SVG(52)}</div><p>Nenhum grupo cadastrado.</p></div>`}
       </div>
       <button class="btn btn-o btn-f mt12 mb16" onclick="R._mNovoGrp()">+ Adicionar Grupo</button>
