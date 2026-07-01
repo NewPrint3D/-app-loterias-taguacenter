@@ -1765,11 +1765,25 @@ const WPP = {
     }
 
     // Atualiza só a lista (sem recriar o input)
-    const parts = WPP._getParticipantes()
-      .filter(p => !filtro || p.nome.toLowerCase().includes(filtro.toLowerCase()));
-    document.getElementById('dest-parts-lista').innerHTML = !parts.length
-      ? '<div class="muted tsm tc" style="padding:16px">Nenhum participante encontrado.</div>'
-      : parts.map(p=>`
+    const todos = WPP._getParticipantes();
+    const parts = todos.filter(p => !filtro || p.nome.toLowerCase().includes(filtro.toLowerCase()));
+    const gruposComJid = DB.grupos.list().filter(g=>g.jid);
+
+    let listaHtml;
+    if (!todos.length) {
+      // Nenhum participante cadastrado ainda
+      listaHtml = `<div style="padding:16px;text-align:center">
+        <div class="muted mb8">Nenhum participante cadastrado.</div>
+        ${gruposComJid.length && BOT._status==='conectado'
+          ? `<button class="btn btn-p btn-sm" onclick="WPP._importarTodosGrupos()">
+               📱 Importar dos grupos WhatsApp
+             </button>`
+          : `<div class="txs muted">Adicione participantes em Admin → Apostadores.</div>`}
+      </div>`;
+    } else if (!parts.length) {
+      listaHtml = `<div class="muted tsm tc" style="padding:16px">Nenhum participante encontrado.</div>`;
+    } else {
+      listaHtml = parts.map(p=>`
         <label class="dest-item ${p.pago?'part-pago':''}">
           <input type="checkbox" ${WPP._selParts.find(x=>x.nome===p.nome)?'checked':''}
                  onchange="WPP._togglePart(${JSON.stringify(p).replace(/"/g,"'")},this.checked)">
@@ -1778,6 +1792,77 @@ const WPP = {
             <div class="dest-sub txs muted">${p.grupos.join(' · ')||'—'} ${p.fone?'· '+p.fone:''}</div>
           </div>
         </label>`).join('');
+    }
+    document.getElementById('dest-parts-lista').innerHTML = listaHtml;
+  },
+
+  async _importarTodosGrupos() {
+    const gs = DB.grupos.list().filter(g=>g.jid);
+    if (!gs.length) return;
+    MODAL.open(`<div class="m-title">📱 Buscando participantes...</div><div class="loading mt16"><div class="spinner"></div></div><p class="tc muted mt8">Consultando ${gs.length} grupo${gs.length>1?'s':''}...</p>`);
+
+    // Busca todos os grupos em paralelo
+    const resultados = await Promise.all(gs.map(async g => {
+      try {
+        const r = await fetch(API_URL+`/api/wpp/participantes/${encodeURIComponent(g.jid)}`);
+        const d = await r.json();
+        return d.ok ? { grupo: g.nome, parts: d.participantes } : { grupo: g.nome, erro: d.error };
+      } catch(e) { return { grupo: g.nome, erro: e.message }; }
+    }));
+
+    // Agrupa todos os participantes únicos (por fone)
+    const mapaFone = {};
+    resultados.forEach(res => {
+      if (res.erro) return;
+      res.parts.forEach(p => {
+        if (!mapaFone[p.fone]) mapaFone[p.fone] = { fone: p.fone, grupos: [] };
+        if (!mapaFone[p.fone].grupos.includes(res.grupo)) mapaFone[p.fone].grupos.push(res.grupo);
+      });
+    });
+
+    const todos = Object.values(mapaFone);
+    const erros = resultados.filter(r=>r.erro);
+
+    if (!todos.length) {
+      MODAL.open(`<div class="m-title">⚠️ Sem participantes</div>
+        <p class="tc muted">${erros.length ? 'Erro: '+erros.map(e=>e.grupo+': '+e.erro).join('<br>') : 'Nenhum participante encontrado nos grupos.'}</p>
+        <button class="btn btn-p btn-f mt12" onclick="MODAL.close()">Fechar</button>`);
+      return;
+    }
+
+    MODAL.open(`
+      <div class="m-title">📱 Participantes dos grupos (${todos.length})</div>
+      <p class="muted txs mb12">Preencha o nome de cada participante. Deixe em branco para pular.</p>
+      <div style="max-height:55vh;overflow-y:auto">
+        ${todos.map((p,i)=>`
+          <div class="fr mb8" style="align-items:center;gap:8px">
+            <input type="checkbox" id="wpi-${i}" checked>
+            <div style="flex:1">
+              <input type="text" id="wpn-${i}" placeholder="Nome do participante"
+                     style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
+              <div class="txs muted">📱 +${p.fone} · ${p.grupos.join(', ')}</div>
+            </div>
+          </div>`).join('')}
+      </div>
+      ${erros.length ? `<div class="txs" style="color:var(--red);margin-top:8px">⚠️ Erro em: ${erros.map(e=>e.grupo).join(', ')}</div>` : ''}
+      <button class="btn btn-p btn-f mt12" onclick="WPP._salvarImportadosWPP(${JSON.stringify(todos).replace(/</g,'&lt;')})">✅ Cadastrar selecionados</button>
+      <button class="btn btn-o btn-f mt8" onclick="MODAL.close()">Cancelar</button>
+    `);
+  },
+
+  _salvarImportadosWPP(todos) {
+    let ok=0, dup=0;
+    todos.forEach((p,i) => {
+      if (!document.getElementById(`wpi-${i}`)?.checked) return;
+      const nome = document.getElementById(`wpn-${i}`)?.value?.trim();
+      if (!nome) return;
+      if (DB.usuarios.find(nome)) { dup++; return; }
+      DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() });
+      ok++;
+    });
+    MODAL.close();
+    alert(`${ok} participante${ok!==1?'s':''} cadastrado${ok!==1?'s':''}!${dup?` (${dup} já existia${dup!==1?'m':''})`:''}`);
+    WPP._renderParts('');
   },
 
   _togglePart(p, on) {
