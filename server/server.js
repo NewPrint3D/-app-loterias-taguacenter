@@ -224,8 +224,14 @@ try { _pinoLog = require('pino')({ level: 'silent' }); } catch { _pinoLog = unde
 // Migração: coluna jid nos grupos
 pool.query(`ALTER TABLE grupos ADD COLUMN IF NOT EXISTS jid TEXT DEFAULT ''`).catch(() => {});
 
-// Tabela de sessão persistente
+// Tabelas persistentes
 pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`).catch(() => {});
+pool.query(`CREATE TABLE IF NOT EXISTS wpp_cadastros (
+  jid TEXT PRIMARY KEY,
+  ativo BOOLEAN DEFAULT true,
+  mensagem TEXT,
+  iniciado TIMESTAMPTZ DEFAULT NOW()
+)`).catch(() => {});
 
 async function pgAuthState() {
   await pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`);
@@ -294,6 +300,77 @@ async function conectarBot() {
     });
 
     botSock.ev.on('creds.update', saveCreds);
+
+    // ---- LISTENER: cadastro automático por mensagem no grupo ----
+    botSock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
+      for (const msg of messages) {
+        try {
+          if (msg.key.fromMe) continue;
+          const groupJid = msg.key.remoteJid;
+          if (!groupJid?.endsWith('@g.us')) continue; // só grupos
+
+          // Verifica se este grupo está com cadastro ativo
+          const cad = await pool.query(
+            'SELECT 1 FROM wpp_cadastros WHERE jid=$1 AND ativo=true', [groupJid]
+          );
+          if (!cad.rows.length) continue;
+
+          // Extrai texto da mensagem
+          const texto = (
+            msg.message?.conversation ||
+            msg.message?.extendedTextMessage?.text ||
+            msg.message?.imageMessage?.caption ||
+            ''
+          ).trim();
+
+          if (!texto || texto.length < 3) continue;
+
+          // Valida que parece um nome (letras, acentos, espaços — 3 a 60 chars)
+          const eNome = /^[a-zA-ZÀ-ÿ\s]{3,60}$/.test(texto);
+          const senderJid = msg.key.participant || groupJid;
+          const fone = senderJid.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+
+          if (!eNome) {
+            await botSock.sendMessage(groupJid, {
+              text: `❌ Para se cadastrar, responda apenas com seu *nome completo*.\nExemplo: _João Silva_`,
+              mentions: [senderJid],
+            });
+            continue;
+          }
+
+          const nome = texto.replace(/\s+/g, ' ');
+
+          // Verifica se já cadastrado pelo telefone (campo fone em membros) ou pelo nome em usuarios
+          const { rows: exU } = await pool.query(
+            `SELECT nome FROM usuarios WHERE LOWER(nome)=LOWER($1)`, [nome]
+          );
+          if (exU.length) {
+            await botSock.sendMessage(groupJid, {
+              text: `✅ *${exU[0].nome}*, você já está cadastrado! Pode participar dos bolões da Lotérica Taguacenter. 🎰`,
+              mentions: [senderJid],
+            });
+            continue;
+          }
+
+          // Cadastra
+          const novoId = crypto.randomUUID();
+          const hoje = new Date().toISOString().split('T')[0];
+          await pool.query(
+            `INSERT INTO usuarios(id, nome, ativo, criado) VALUES($1,$2,true,$3)`,
+            [novoId, nome, hoje]
+          );
+
+          await botSock.sendMessage(groupJid, {
+            text: `🎉 *${nome}*, você foi cadastrado com sucesso!\n\nBem-vindo aos bolões da *Lotérica Taguacenter*! 🎰\nAcompanhe os resultados pelo nosso app.`,
+            mentions: [senderJid],
+          });
+          console.log(`Cadastro automático: ${nome} (${fone}) no grupo ${groupJid}`);
+        } catch (e) {
+          console.error('Erro no cadastro automático:', e.message);
+        }
+      }
+    });
 
     botSock.ev.on('connection.update', async upd => {
       const { connection, lastDisconnect, qr } = upd;
@@ -433,6 +510,77 @@ app.post('/api/wpp/enviar', async (req, res) => {
     await new Promise(r => setTimeout(r, 3000));
   }
   res.json({ ok: true, resultados });
+});
+
+// ---- CADASTRO AUTOMÁTICO ----
+
+app.post('/api/wpp/iniciar-cadastro', async (req, res) => {
+  if (!botSock || botStatus !== 'conectado')
+    return res.status(503).json({ ok: false, error: 'Bot não conectado' });
+  const { grupos, mensagem } = req.body;
+  if (!Array.isArray(grupos) || !grupos.length)
+    return res.status(400).json({ ok: false, error: 'Informe ao menos um grupo' });
+
+  const msg = mensagem ||
+    '👋 Olá! Para participar dos nossos bolões, responda *esta mensagem* com seu *nome completo*.\n\n' +
+    'Exemplo: _João da Silva_\n\n' +
+    'Você será cadastrado automaticamente! 🎰';
+
+  const erros = [];
+  for (const g of grupos) {
+    try {
+      await pool.query(
+        `INSERT INTO wpp_cadastros(jid, ativo, mensagem) VALUES($1, true, $2)
+         ON CONFLICT(jid) DO UPDATE SET ativo=true, mensagem=$2, iniciado=NOW()`,
+        [g.jid, msg]
+      );
+      await botSock.sendMessage(g.jid, { text: msg });
+      await new Promise(r => setTimeout(r, 2000));
+    } catch (e) {
+      erros.push(g.nome + ': ' + e.message);
+    }
+  }
+  res.json({ ok: true, erros });
+});
+
+app.get('/api/wpp/status-cadastro', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT jid, ativo, mensagem, iniciado FROM wpp_cadastros WHERE ativo=true`
+    );
+    // Conta quantos usuarios foram cadastrados desde o início do cadastro mais recente
+    const desde = rows.length ? rows.reduce((min, r) =>
+      new Date(r.iniciado) < new Date(min) ? r.iniciado : min, rows[0].iniciado
+    ) : null;
+    let novos = 0;
+    if (desde) {
+      const r2 = await pool.query(
+        `SELECT COUNT(*) FROM usuarios WHERE criado >= $1::date`, [desde]
+      );
+      novos = parseInt(r2.rows[0].count, 10);
+    }
+    res.json({ ok: true, ativos: rows, novos });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/wpp/encerrar-cadastro', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE wpp_cadastros SET ativo=false WHERE ativo=true RETURNING jid`
+    );
+    // Envia mensagem de encerramento para cada grupo
+    if (botSock && botStatus === 'conectado') {
+      for (const r of rows) {
+        try {
+          await botSock.sendMessage(r.jid, {
+            text: '✅ Cadastro encerrado! Obrigado a todos que se cadastraram. Acompanhe os bolões pelo nosso app. 🎉'
+          });
+          await new Promise(x => setTimeout(x, 1500));
+        } catch {}
+      }
+    }
+    res.json({ ok: true, encerrados: rows.length });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));

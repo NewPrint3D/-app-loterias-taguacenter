@@ -1047,6 +1047,13 @@ const R = {
       </div>
       <button class="btn btn-o btn-f mt12 mb16" onclick="R._mNovoGrp()">+ Adicionar Grupo</button>
       <div class="divider"></div>
+      <div class="fxb mb8">
+        <div class="sectt">Cadastro Automático</div>
+        <span id="cad-badge"></span>
+      </div>
+      <div id="cad-status"></div>
+      <div class="ia-aviso mt8 mb16">💡 O bot envia uma mensagem nos grupos e cadastra automaticamente quem responder com o nome.</div>
+      <div class="divider"></div>
       <div class="sectt mb8">Cartela do bolão</div>
       <div id="cartela-zone" class="cartela-drop${S.cartela?' has-file':''}"
            ondragover="CARTELA.dragOver(event)" ondragleave="CARTELA.dragLeave(event)" ondrop="CARTELA.drop(event)"
@@ -1120,6 +1127,7 @@ const R = {
       <div class="ia-aviso mt12">💡 ${S.cartela?'A cartela será baixada automaticamente para você anexar.':'Carregue a cartela acima para enviá-la junto.'}</div>`;
     WPP.aoTrocarLt($('wlt')?.value || 'megasena');
     WPP.setDest(WPP._dest, document.querySelector('.dtab.on'));
+    WPP._atualizarCadastroStatus(); // carrega status do cadastro automático
   },
 
   _mNovoGrp() {
@@ -1866,6 +1874,104 @@ const WPP = {
     MODAL.close();
     alert(`${ok} participante${ok!==1?'s':''} cadastrado${ok!==1?'s':''}!${dup?` (${dup} já existia${dup!==1?'m':''})`:''}`);
     WPP._renderParts('');
+  },
+
+  // ---- CADASTRO AUTOMÁTICO ----
+  _cadTimer: null,
+
+  async _atualizarCadastroStatus() {
+    const badge = document.getElementById('cad-badge');
+    const statusEl = document.getElementById('cad-status');
+    if (!badge || !statusEl) return;
+
+    try {
+      const r = await fetch(API_URL + '/api/wpp/status-cadastro');
+      const d = await r.json();
+      const ativo = d.ok && d.ativos?.length > 0;
+
+      if (ativo) {
+        badge.innerHTML = `<span style="color:var(--primary);font-weight:700">🟢 ATIVO</span>`;
+        statusEl.innerHTML = `
+          <div class="card" style="border:1px solid var(--primary)">
+            <div class="fxb mb8">
+              <div><b>${d.novos} novo${d.novos!==1?'s':''} cadastrado${d.novos!==1?'s':''}</b> desde o início</div>
+              <button class="btn btn-d btn-sm" onclick="WPP._encerrarCadastro()">⏹ Encerrar</button>
+            </div>
+            <div class="txs muted">Grupos ativos: ${d.ativos.map(a=>a.jid.split('@')[0]).join(', ')}</div>
+            <div class="ia-aviso mt8">👥 Quem responder no grupo com o nome completo é cadastrado automaticamente!</div>
+          </div>`;
+        // Polling a cada 8s para atualizar contagem
+        clearInterval(WPP._cadTimer);
+        WPP._cadTimer = setInterval(() => WPP._atualizarCadastroStatus(), 8000);
+      } else {
+        clearInterval(WPP._cadTimer);
+        badge.innerHTML = `<span class="muted txs">inativo</span>`;
+        const gs = DB.grupos.list().filter(g=>g.jid);
+        statusEl.innerHTML = gs.length
+          ? `<button class="btn btn-p btn-f" onclick="WPP._iniciarCadastroAuto()">📋 Iniciar cadastro automático</button>`
+          : `<div class="ia-aviso">⚠️ Vincule o bot aos grupos primeiro (ícone Bot ✓ nos grupos acima).</div>`;
+      }
+    } catch (e) {
+      statusEl.innerHTML = `<button class="btn btn-p btn-f" onclick="WPP._iniciarCadastroAuto()">📋 Iniciar cadastro automático</button>`;
+    }
+  },
+
+  _iniciarCadastroAuto() {
+    const gs = DB.grupos.list().filter(g=>g.jid);
+    if (!gs.length) { alert('Nenhum grupo tem o bot vinculado ainda.'); return; }
+    const checks = gs.map((g,i)=>`
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer">
+        <input type="checkbox" id="cg-${i}" checked>
+        <span>${g.nome}</span>
+      </label>`).join('');
+    MODAL.open(`
+      <div class="m-title">📋 Cadastro Automático</div>
+      <p class="muted txs mb12">O bot enviará uma mensagem nos grupos selecionados. Cada pessoa que responder com o nome será cadastrada automaticamente.</p>
+      <div class="fg mb8"><label>Grupos</label>${checks}</div>
+      <div class="fg">
+        <label>Mensagem (opcional)</label>
+        <textarea id="cad-msg" rows="4" placeholder="Deixe em branco para usar a mensagem padrão..."
+                  style="width:100%;padding:8px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)"></textarea>
+      </div>
+      <div class="ia-aviso mt8 mb12">👆 Mensagem padrão: <em>"Responda com seu nome completo para se cadastrar"</em></div>
+      <button class="btn btn-p btn-f" onclick="WPP._enviarCadastro(${JSON.stringify(gs.map((_,i)=>i))})">🚀 Enviar e ativar</button>
+      <button class="btn btn-o btn-f mt8" onclick="MODAL.close()">Cancelar</button>
+    `);
+  },
+
+  async _enviarCadastro(indices) {
+    const gs = DB.grupos.list().filter(g=>g.jid);
+    const selecionados = indices
+      .filter(i => document.getElementById(`cg-${i}`)?.checked)
+      .map(i => gs[i]).filter(Boolean);
+    if (!selecionados.length) { alert('Selecione ao menos um grupo.'); return; }
+    const mensagem = document.getElementById('cad-msg')?.value?.trim() || '';
+    MODAL.close();
+    MODAL.open(`<div class="m-title">🚀 Ativando cadastro...</div><div class="loading mt16"><div class="spinner"></div></div>`);
+    try {
+      const r = await fetch(API_URL + '/api/wpp/iniciar-cadastro', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grupos: selecionados, mensagem: mensagem || undefined }),
+      });
+      const d = await r.json();
+      MODAL.close();
+      if (!d.ok) { alert('Erro: ' + (d.error||'Tente novamente.')); return; }
+      alert(`✅ Cadastro automático ativado!\n\nMensagem enviada para ${selecionados.length} grupo${selecionados.length>1?'s':''}.\nQuem responder com o nome será cadastrado automaticamente.`);
+      WPP._atualizarCadastroStatus();
+    } catch (e) {
+      MODAL.close();
+      alert('Erro de conexão: ' + e.message);
+    }
+  },
+
+  async _encerrarCadastro() {
+    if (!confirm('Encerrar o cadastro automático?\nO bot enviará uma mensagem de encerramento nos grupos.')) return;
+    try {
+      await fetch(API_URL + '/api/wpp/encerrar-cadastro', { method: 'POST' });
+      clearInterval(WPP._cadTimer);
+      WPP._atualizarCadastroStatus();
+    } catch (e) { alert('Erro: ' + e.message); }
   },
 
   _togglePart(p, on) {
