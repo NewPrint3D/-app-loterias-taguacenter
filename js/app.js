@@ -1713,7 +1713,7 @@ const WPP = {
                  onchange="WPP._toggleGrupo('${g.id}',this.checked)">
           <div class="dest-info">
             <div class="dest-nome">${g.nome}</div>
-            <div class="dest-sub txs muted">${g.membros} membros</div>
+            <div class="dest-sub txs muted">${(()=>{const s=new Set();S.cache.boloes.filter(b=>b.grupo===g.nome).forEach(b=>(b.membros||[]).forEach(m=>s.add(m.nome.trim().toLowerCase())));const c=s.size||g.membros;return c+' apostador'+(c!==1?'es':'');})()}</div>
           </div>
         </label>`).join('')}</div>`;
 
@@ -1728,43 +1728,56 @@ const WPP = {
 
   _getParticipantes() {
     const mapa = {};
-    DB.boloes.list().forEach(b => {
+    // Membros dos bolões (com fone, grupo, pago)
+    S.cache.boloes.forEach(b => {
       (b.membros||[]).forEach(m => {
-        const key = m.nome.trim().toLowerCase();
-        if(!mapa[key]) mapa[key] = { nome:m.nome, fone:m.fone||'', grupos:[], pago:m.pago };
-        if(b.grupo && !mapa[key].grupos.includes(b.grupo)) mapa[key].grupos.push(b.grupo);
-        if(m.pago) mapa[key].pago = true;
+        const k = m.nome.trim().toLowerCase();
+        if(!mapa[k]) mapa[k] = { nome:m.nome, fone:m.fone||'', grupos:[], pago:!!m.pago };
+        if(b.grupo && !mapa[k].grupos.includes(b.grupo)) mapa[k].grupos.push(b.grupo);
+        if(m.fone && !mapa[k].fone) mapa[k].fone = m.fone;
+        if(m.pago) mapa[k].pago = true;
       });
+    });
+    // Apostadores registrados no app (mesmo sem bolão)
+    DB.usuarios.list().forEach(u => {
+      const k = u.nome.trim().toLowerCase();
+      if(!mapa[k]) mapa[k] = { nome:u.nome, fone:'', grupos:[], pago:false };
     });
     return Object.values(mapa).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
   },
 
-  _renderParts(filtro) {
+  _renderParts(filtro='') {
     const el = $('dest-body'); if(!el) return;
+
+    // Renderiza o shell (input + lista + volante pago) apenas uma vez — evita perda de foco
+    if (!document.getElementById('dest-parts-lista')) {
+      el.innerHTML = `
+        <input id="dest-parts-busca" class="fg" type="text" placeholder="🔍 Buscar participante..."
+               style="margin-bottom:10px" oninput="WPP._renderParts(this.value)">
+        <div id="dest-parts-lista" class="dest-lista"></div>
+        <label class="dest-item mt8" style="border-top:1px solid var(--border);padding-top:12px">
+          <input type="checkbox" ${WPP._volantePago?'checked':''} onchange="WPP._volantePago=this.checked">
+          <div class="dest-info">
+            <div class="dest-nome">✅ Enviar como "Volante Pago"</div>
+            <div class="dest-sub txs muted">Troca a mensagem para confirmação de pagamento</div>
+          </div>
+        </label>`;
+    }
+
+    // Atualiza só a lista (sem recriar o input)
     const parts = WPP._getParticipantes()
-      .filter(p=>!filtro || p.nome.toLowerCase().includes(filtro.toLowerCase()));
-    el.innerHTML = `
-      <input class="fg" type="text" placeholder="🔍 Buscar participante..." value="${filtro}"
-             oninput="WPP._renderParts(this.value)" style="margin-bottom:10px">
-      <div class="dest-lista">
-        ${!parts.length ? '<div class="muted tsm tc" style="padding:16px">Nenhum participante encontrado.</div>'
-          : parts.map(p=>`
-          <label class="dest-item ${p.pago?'part-pago':''}">
-            <input type="checkbox" ${WPP._selParts.find(x=>x.nome===p.nome)?'checked':''}
-                   onchange="WPP._togglePart(${JSON.stringify(p).replace(/"/g,"'")},this.checked)">
-            <div class="dest-info">
-              <div class="dest-nome">${p.nome} ${p.pago?'<span class="badge b-pago txs">Pago ✓</span>':''}</div>
-              <div class="dest-sub txs muted">${p.grupos.join(' · ')||'—'} ${p.fone?'· '+p.fone:''}</div>
-            </div>
-          </label>`).join('')}
-      </div>
-      <label class="dest-item mt8" style="border-top:1px solid var(--border);padding-top:12px">
-        <input type="checkbox" ${WPP._volantePago?'checked':''} onchange="WPP._volantePago=this.checked">
-        <div class="dest-info">
-          <div class="dest-nome">✅ Enviar como "Volante Pago"</div>
-          <div class="dest-sub txs muted">Troca a mensagem para confirmação de pagamento</div>
-        </div>
-      </label>`;
+      .filter(p => !filtro || p.nome.toLowerCase().includes(filtro.toLowerCase()));
+    document.getElementById('dest-parts-lista').innerHTML = !parts.length
+      ? '<div class="muted tsm tc" style="padding:16px">Nenhum participante encontrado.</div>'
+      : parts.map(p=>`
+        <label class="dest-item ${p.pago?'part-pago':''}">
+          <input type="checkbox" ${WPP._selParts.find(x=>x.nome===p.nome)?'checked':''}
+                 onchange="WPP._togglePart(${JSON.stringify(p).replace(/"/g,"'")},this.checked)">
+          <div class="dest-info">
+            <div class="dest-nome">${p.nome} ${p.pago?'<span class="badge b-pago txs">Pago ✓</span>':''}</div>
+            <div class="dest-sub txs muted">${p.grupos.join(' · ')||'—'} ${p.fone?'· '+p.fone:''}</div>
+          </div>
+        </label>`).join('');
   },
 
   _togglePart(p, on) {
