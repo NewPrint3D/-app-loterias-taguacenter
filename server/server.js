@@ -3,10 +3,12 @@ const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.set('trust proxy', 1); // Render fica atrás de proxy — necessário para req.ip correto
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
@@ -17,6 +19,38 @@ const pool = new Pool({
 
 // ---- HEALTH ----
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+// ---- AUTH (admin / dev) ----
+// Hashes vêm de env vars no Render (ADMIN_SENHA_HASH / DEV_SENHA_HASH).
+// Fallback local só para não quebrar o dev local — gerar hash: bcrypt.hashSync('senha', 10)
+const _loginHashes = {
+  admin: process.env.ADMIN_SENHA_HASH || bcrypt.hashSync('admin123', 10),
+  dev:   process.env.DEV_SENHA_HASH   || bcrypt.hashSync('dev@zeloteca2024', 10),
+};
+const _loginNomes = { admin: 'Administrador', dev: 'Desenvolvedor' };
+const _loginTentativas = new Map(); // ip -> { falhas, bloqueadoAte }
+
+app.post('/api/auth/login', async (req, res) => {
+  const { login, senha } = req.body || {};
+  const ip = req.ip;
+  const agora = Date.now();
+  const t = _loginTentativas.get(ip);
+  if (t?.bloqueadoAte > agora) {
+    return res.status(429).json({ ok: false, error: 'Muitas tentativas. Aguarde alguns minutos.' });
+  }
+  const hash = _loginHashes[login];
+  if (!hash || typeof senha !== 'string') {
+    return res.status(401).json({ ok: false, error: 'Senha incorreta.' });
+  }
+  const valido = await bcrypt.compare(senha, hash);
+  if (!valido) {
+    const falhas = (t?.falhas || 0) + 1;
+    _loginTentativas.set(ip, { falhas, bloqueadoAte: falhas >= 5 ? agora + 5 * 60 * 1000 : 0 });
+    return res.status(401).json({ ok: false, error: 'Senha incorreta.' });
+  }
+  _loginTentativas.delete(ip);
+  res.json({ ok: true, role: login, nome: _loginNomes[login] });
+});
 
 // ---- PROXY CAIXA (evita CORS no frontend) ----
 app.get('/api/caixa/:loteria/:concurso?', async (req, res) => {

@@ -116,7 +116,14 @@ const AUTH = {
       : v.trim() ? 'Informe o nome do seu grupo de bolão' : 'Digite seu nome para entrar';
   },
 
-  entrar() {
+  // Chama o endpoint de login e devolve o JSON mesmo em resposta de erro (401/429)
+  async _checarSenha(login, senha) {
+    const resp = await _api.post('/api/auth/login', { login, senha });
+    if (!resp) return { ok:false, error:'Falha de conexão com o servidor.' };
+    return resp.json().catch(() => ({ ok:false, error:'Falha de conexão com o servidor.' }));
+  },
+
+  async entrar() {
     const nome = $('inp-nome').value.trim();
     const senha = $('inp-p').value;
     const low   = nome.toLowerCase();
@@ -124,17 +131,13 @@ const AUTH = {
 
     if (!nome) { err.hidden=false; err.textContent='Digite seu nome.'; return; }
 
-    // Dev
-    if (low === 'dev' && senha === atob(APP._dk)) {
-      S.user = { login:'dev', role:'dev', nome:'Desenvolvedor' };
-      AUTH._start(); return;
-    }
-    // Admin
-    if (low === 'admin') {
-      if (senha !== CREDS.admin.senha) {
-        err.hidden=false; err.textContent='Senha incorreta.'; return;
-      }
-      S.user = { login:'admin', role:'admin', nome:'Administrador' };
+    // Dev / Admin — senha validada no servidor
+    if (low === 'dev' || low === 'admin') {
+      err.hidden=false; err.style.color='#aaa'; err.textContent='⏳ Verificando...';
+      const data = await AUTH._checarSenha(low, senha);
+      err.style.color='';
+      if (!data?.ok) { err.hidden=false; err.textContent = data?.error || 'Senha incorreta.'; return; }
+      S.user = { login:low, role:data.role, nome:data.nome };
       AUTH._start(); return;
     }
     // Cliente — nome + grupo obrigatórios
@@ -2169,16 +2172,18 @@ const DEV = {
     S.dtaps++;
     if(S.dtaps>=7){S.dtaps=0; DEV._ask();}
   },
-  _ask() {
+  async _ask() {
     const pw=prompt('🔒 Acesso restrito. Senha:');
-    if(pw===atob(APP._dk)){
+    if(pw===null) return;
+    const data = await AUTH._checarSenha('dev', pw);
+    if(data?.ok){
       S.user={login:'dev',role:'dev',nome:'Desenvolvedor'};
       sessionStorage.setItem('ltr_s',JSON.stringify(S.user));
       const b=$('h-badge'); b.className='badge b-dev'; b.textContent='DEV';
       $('nav-user').hidden=true;
       $('nav-admin').hidden=false;
       R.ir('controle');
-    } else if(pw!==null) alert('Senha incorreta.');
+    } else alert(data?.error || 'Senha incorreta.');
   },
   block(v) {
     const c=DB.ctrl.get(); c.bloqueado=v; DB.ctrl.set(c);
@@ -2214,14 +2219,16 @@ const DEV = {
     DEV._bt_t=now; DEV._btaps++;
     if(DEV._btaps>=7){ DEV._btaps=0; DEV._unblockAsk(); }
   },
-  _unblockAsk() {
+  async _unblockAsk() {
     const pw=prompt('🔒 Senha de desbloqueio:');
-    if(pw===atob(APP._dk)){
+    if(pw===null) return;
+    const data = await AUTH._checarSenha('dev', pw);
+    if(data?.ok){
       const c=DB.ctrl.get(); c.bloqueado=false; DB.ctrl.set(c);
       DB.ctrl.log('Desbloqueado via tela de manutenção');
       $('bloqueio').hidden=true;
       DEV._continuar();
-    } else if(pw!==null) alert('Senha incorreta.');
+    } else alert(data?.error || 'Senha incorreta.');
   },
   _continuar() {
     setTimeout(()=>{

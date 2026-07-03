@@ -3,7 +3,6 @@
 const APP = {
   nome: 'Lotérica Taguacenter',
   versao: '1.0.0',
-  _dk: btoa('dev@zeloteca2024'), // senha dev (não exibir)
 };
 
 const LOTERIAS = {
@@ -14,11 +13,6 @@ const LOTERIAS = {
   timemania: { id:'timemania', nome:'Timemania',    emoji:'⚽', dezenas:10, max:80,  preco:3.50, cor:'#41b13b', cor2:'#1d5a1a', api:'timemania', dias:'Ter, Qui e Sáb' },
   duplasena: { id:'duplasena', nome:'Dupla Sena',   emoji:'🎲', dezenas:6,  max:50,  preco:2.50, cor:'#a31040', cor2:'#5c091f', api:'duplasena', dias:'Ter, Qui e Sáb' },
   diadesorte:{ id:'diadesorte',nome:'Dia de Sorte', emoji:'🌟', dezenas:7,  max:31,  preco:2.50, cor:'#108743', cor2:'#063d1e', api:'diadesorte',dias:'Terça e Sábado' },
-};
-
-const CREDS = {
-  admin:     { role:'admin',   nome:'Administrador', senha:'admin123' },
-  apostador: { role:'cliente', nome:'Apostador',      senha:'loterias123' },
 };
 
 const FRASES_ZE = [
