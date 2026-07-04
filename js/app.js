@@ -29,6 +29,13 @@ function fmtPremio(v, curto=false) {
 }
 const fmtN = n => (n||0).toLocaleString('pt-BR');
 const uid  = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+// Normaliza telefone para só dígitos, garantindo DDI 55 (ex: 5561999999999)
+function normalizarFone(raw) {
+  let d = (raw||'').replace(/\D/g,'');
+  if (!d) return '';
+  if (d.length <= 11) d = '55' + d;
+  return d;
+}
 const WPP_SVG = (size=32) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${size}" height="${size}"><path fill="#25d366" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>`;
 const hoje = () => new Date().toLocaleDateString('pt-BR');
 
@@ -1021,6 +1028,137 @@ const R = {
     R._usuarios();
   },
 
+  // ---- IMPORTAR MEMBROS POR COLAGEM (WhatsApp) ----
+  // Reconhece linhas como "Nome: +55 61 99999-9999", "Nome +5561999999999",
+  // "+55 61 9999-9999" (sem nome) ou "Nome" (sem fone). Ignora vazias, "Você" e emojis soltos.
+  // \b do regex não funciona bem com "ê", então checa manualmente o caractere seguinte.
+  _ehVoceOuYou(linha) {
+    const low = linha.toLowerCase();
+    for (const pref of ['você', 'voce', 'you']) {
+      if (low.startsWith(pref)) {
+        const prox = low.charAt(pref.length);
+        if (!prox || !/[a-z]/i.test(prox)) return true;
+      }
+    }
+    return false;
+  },
+  _parseLinhasWA(texto) {
+    const foneRe = /(\+?\d[\d\s\-().]{6,}\d)/;
+    const vistos = new Set();
+    const out = [];
+    (texto||'').split(/\r?\n/).forEach(linhaBruta => {
+      const linha = linhaBruta.trim();
+      if (!linha) return;
+      if (R._ehVoceOuYou(linha)) return;
+
+      const m = linha.match(foneRe);
+      let nome = '', fone = '';
+      if (m) {
+        fone = normalizarFone(m[1]);
+        nome = (linha.slice(0, m.index) + linha.slice(m.index + m[1].length))
+          .trim().replace(/[:\-–]+$/,'').trim();
+        if (!nome) nome = 'Sem nome';
+      } else {
+        if (!/[a-zA-ZÀ-ÿ]/.test(linha)) return; // emoji/símbolo solto
+        nome = linha;
+      }
+      if (fone) {
+        if (vistos.has(fone)) return; // duplicado (mesmo fone)
+        vistos.add(fone);
+      }
+      out.push({ nome, fone });
+    });
+    return out;
+  },
+  _mImportarColar(grupoId, textoPrevio, bolaoIdPrevio) {
+    const g = DB.grupos.list().find(x=>x.id===grupoId); if (!g) return;
+    const boloes = DB.boloes.list().filter(b=>b.grupo===g.nome);
+    if (!boloes.length) {
+      MODAL.open(`<div class="m-title">📋 Importar membros</div>
+        <p class="muted txs">Nenhum bolão cadastrado para o grupo <strong>${g.nome}</strong>. Crie um bolão vinculado a este grupo primeiro.</p>
+        <button class="btn btn-o btn-f mt12" onclick="MODAL.close()">Fechar</button>`);
+      return;
+    }
+    R._colar = { grupoId };
+    MODAL.open(`
+      <div class="m-title">📋 Importar membros — ${g.nome}</div>
+      <div class="fg">
+        <label>Bolão de destino</label>
+        <select id="imp-bolao">
+          ${boloes.map(b=>`<option value="${b.id}" ${b.id===bolaoIdPrevio?'selected':''}>${LOTERIAS[b.loteria]?.emoji||''} ${b.nome} (concurso ${b.concurso||'-'})</option>`).join('')}
+        </select>
+      </div>
+      <div class="fg">
+        <label>Cole a lista de membros copiada do WhatsApp</label>
+        <textarea id="imp-texto" rows="8" placeholder="Ex:&#10;João Silva: +55 61 99999-9999&#10;Maria +5561988887777&#10;+55 61 97777-6666">${textoPrevio||''}</textarea>
+      </div>
+      <button class="btn btn-p btn-f mt8" onclick="R._analisarColados()">🔍 Analisar lista</button>
+      <button class="btn btn-o btn-f mt8" onclick="MODAL.close()">Cancelar</button>
+    `);
+  },
+  _analisarColados() {
+    const bolaoId = $('imp-bolao')?.value;
+    const texto = $('imp-texto')?.value || '';
+    const parsed = R._parseLinhasWA(texto);
+    if (!parsed.length) { alert('Nenhum membro reconhecido no texto colado.'); return; }
+    R._colar = { grupoId: R._colar?.grupoId, bolaoId, texto, parsed };
+    const bolao = DB.boloes.get(bolaoId);
+    MODAL.open(`
+      <div class="m-title">📋 ${parsed.length} membro${parsed.length!==1?'s':''} encontrado${parsed.length!==1?'s':''}</div>
+      <p class="muted txs mb12">Confira e desmarque quem não deve ser importado para <strong>${bolao?.nome||''}</strong>:</p>
+      <div style="max-height:45vh;overflow-y:auto">
+        ${parsed.map((p,i)=>`
+          <div class="fr mb8" style="align-items:center;gap:8px">
+            <input type="checkbox" id="ic-${i}" checked>
+            <div style="flex:1">
+              <input type="text" id="in-${i}" value="${(p.nome||'').replace(/"/g,'&quot;')}" placeholder="Nome"
+                     style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text);margin-bottom:4px">
+              <input type="text" id="if-${i}" value="${p.fone||''}" placeholder="Telefone (opcional)"
+                     style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
+            </div>
+          </div>`).join('')}
+      </div>
+      <button class="btn btn-p btn-f mt12" onclick="R._salvarColados()">✅ Salvar todos</button>
+      <button class="btn btn-o btn-f mt8" onclick="R._voltarImportarColar()">◀ Voltar</button>
+    `);
+  },
+  _voltarImportarColar() {
+    const c = R._colar||{};
+    R._mImportarColar(c.grupoId, c.texto, c.bolaoId);
+  },
+  _salvarColados() {
+    const c = R._colar; if (!c) return;
+    const bolao = DB.boloes.get(c.bolaoId);
+    if (!bolao) { alert('Bolão não encontrado.'); MODAL.close(); return; }
+    const existentes = bolao.membros || [];
+    const fonesExistentes = new Set(existentes.map(m=>normalizarFone(m.fone)).filter(Boolean));
+    const nomesExistentes = new Set(existentes.map(m=>m.nome.trim().toLowerCase()));
+    const novos = [];
+    let dup = 0;
+    c.parsed.forEach((p,i) => {
+      if (!$(`ic-${i}`)?.checked) return;
+      const nome = $(`in-${i}`)?.value?.trim();
+      if (!nome) return;
+      const fone = normalizarFone($(`if-${i}`)?.value || '');
+      if (fone && fonesExistentes.has(fone)) { dup++; return; }
+      if (!fone && nomesExistentes.has(nome.toLowerCase())) { dup++; return; }
+      if (fone) fonesExistentes.add(fone);
+      nomesExistentes.add(nome.toLowerCase());
+      novos.push({ nome, fone, cotas:1, pago:false });
+    });
+    if (!novos.length) {
+      MODAL.close();
+      alert(dup ? `Nenhum membro novo — ${dup} já estava cadastrado no bolão.` : 'Nenhum membro selecionado.');
+      return;
+    }
+    bolao.membros = [...existentes, ...novos];
+    DB.boloes.save(bolao);
+    MODAL.close();
+    alert(`${novos.length} membro${novos.length!==1?'s':''} importado${novos.length!==1?'s':''}!${dup?` (${dup} duplicado${dup!==1?'s':''} ignorado${dup!==1?'s':''})`:''}`);
+    R._colar = null;
+    R._whatsapp();
+  },
+
   // ---- WHATSAPP ----
   _whatsapp() {
     if(!AUTH.isAdmin()){R.ir('home');return;}
@@ -1040,6 +1178,7 @@ const R = {
               <div class="grp-meta">${cnt} apostador${cnt!==1?'es':''}</div>
             </div>
             <div class="grp-acts">
+              <button class="btn btn-o btn-sm" onclick="R._mImportarColar('${g.id}')">📋 Importar membros</button>
               ${g.jid?`<button class="btn btn-o btn-sm" onclick="R._importarWA('${g.id}','${g.jid}')">📱 Importar</button>`:''}
               <button class="btn-ico" onclick="R._mEditGrp('${g.id}')">✏️</button>
               <button class="btn-ico" onclick="R._delGrp('${g.id}')">🗑️</button>
@@ -2075,8 +2214,8 @@ const WPP = {
     const p = parts[i];
     const msg = WPP._volantePago ? WPP._msgPago(p.nome, p.grupos[0]) : WPP._msg;
     const enc = encodeURIComponent(msg);
-    const foneNum = p.fone?.replace(/\D/g,'');
-    const link = foneNum ? `https://wa.me/55${foneNum}?text=${enc}` : null;
+    const foneNorm = normalizarFone(p.fone);
+    const link = foneNorm ? `https://wa.me/${foneNorm}?text=${enc}` : null;
     const tc = S.cartela;
     const pct = ((i/parts.length)*100).toFixed(0);
 
