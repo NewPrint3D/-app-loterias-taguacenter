@@ -40,14 +40,130 @@ const WPP_SVG = (size=32) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
 const hoje = () => new Date().toLocaleDateString('pt-BR');
 
 // =============================================
-// API backend
+// TOAST (avisos flutuantes)
+// =============================================
+const TOAST = {
+  show(msg, tipo='err') {
+    let area = $('toast-area');
+    if (!area) {
+      area = document.createElement('div');
+      area.id = 'toast-area';
+      area.className = 'toast-area';
+      document.body.appendChild(area);
+    }
+    const el = document.createElement('div');
+    el.className = `toast toast-${tipo}`;
+    el.textContent = msg;
+    area.appendChild(el);
+    setTimeout(()=>el.remove(), 5000);
+  },
+};
+
+// =============================================
+// API backend — token JWT, retry automático e fila offline
 // =============================================
 const API_URL = 'https://api-loterias-taguacenter.onrender.com';
+const TOKEN_KEY = 'ltr_token';
+const FILA_KEY  = 'ltr_fila';
+
+const _token = {
+  get:   () => localStorage.getItem(TOKEN_KEY) || '',
+  set:   t  => { if (t) localStorage.setItem(TOKEN_KEY, t); },
+  clear: () => localStorage.removeItem(TOKEN_KEY),
+};
+
+function _sessaoExpirada() {
+  _token.clear();
+  sessionStorage.removeItem('ltr_s');
+  S.user = null;
+  TOAST.show('Sessão expirada. Faça login novamente.', 'err');
+  const shell=$('shell'), bloqueio=$('bloqueio'), login=$('tela-login');
+  if (shell) shell.hidden = true;
+  if (bloqueio) bloqueio.hidden = true;
+  if (login) login.hidden = false;
+}
+
+// Faz a chamada com retry (1s, 3s, 8s) só pra falhas transitórias (rede/5xx).
+// 401 nunca é retentado. 4xx (erro do próprio pedido) também não — repetir não muda o resultado.
+async function _fetchComRetry(method, path, body) {
+  const delays = [1000, 3000, 8000];
+  for (let tentativa = 0; tentativa <= delays.length; tentativa++) {
+    try {
+      const headers = {};
+      if (_token.get()) headers['Authorization'] = 'Bearer ' + _token.get();
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      const r = await fetch(API_URL+path, { method, headers, body: body!==undefined?JSON.stringify(body):undefined });
+      const renovado = r.headers.get('X-Token-Renovado');
+      if (renovado) _token.set(renovado);
+      if (r.status === 401) {
+        // 401 no login = senha errada (não desloga). Cliente nunca teve token, então um 401
+        // (ex: replay de item da fila deixado por uma sessão de admin anterior no mesmo aparelho)
+        // não deve derrubar a sessão dele.
+        if (path !== '/api/auth/login' && S.user?.role !== 'cliente') _sessaoExpirada();
+        return r;
+      }
+      if (r.ok || (r.status >= 400 && r.status < 500)) return r; // 4xx é definitivo — não adianta repetir
+      throw new Error('HTTP ' + r.status); // 5xx ou similar — trata como falha transitória
+    } catch (e) {
+      if (tentativa === delays.length) return null; // esgotou as tentativas
+      await new Promise(res=>setTimeout(res, delays[tentativa]));
+    }
+  }
+}
+
+function _filaLer()      { try { return JSON.parse(localStorage.getItem(FILA_KEY)||'[]'); } catch { return []; } }
+function _filaSalvar(f)  { localStorage.setItem(FILA_KEY, JSON.stringify(f)); }
+function _filaAdicionar(method, path, body) {
+  const fila = _filaLer();
+  fila.push({ method, path, body, id: uid() });
+  _filaSalvar(fila);
+}
+async function _filaReprocessar() {
+  const fila = _filaLer();
+  if (!fila.length) return;
+  const resultados = await Promise.all(fila.map(async item => {
+    const r = await _fetchComRetry(item.method, item.path, item.body);
+    return { item, ok: !!r && r.ok };
+  }));
+  const restantes = resultados.filter(x=>!x.ok).map(x=>x.item);
+  _filaSalvar(restantes);
+  const sincronizados = fila.length - restantes.length;
+  if (sincronizados > 0) {
+    TOAST.show(`✅ ${sincronizados} alteração${sincronizados!==1?'ões':''} sincronizada${sincronizados!==1?'s':''}!`, 'ok');
+  }
+}
+window.addEventListener('online', _filaReprocessar);
+
+// Escritas (post/put/del): se esgotar o retry, entra na fila offline e avisa (exceto o login — nunca guarda senha na fila)
+async function _escrever(method, path, body) {
+  // Já sabendo que está offline, não adianta gastar os 12s de retry — vai direto pra fila
+  if (navigator.onLine === false) {
+    if (path !== '/api/auth/login') {
+      _filaAdicionar(method, path, body);
+      TOAST.show('⚠️ Sem conexão — a alteração será enviada quando voltar', 'err');
+    }
+    return null;
+  }
+  const r = await _fetchComRetry(method, path, body);
+  if (!r && path !== '/api/auth/login') {
+    _filaAdicionar(method, path, body);
+    TOAST.show('⚠️ Erro ao salvar — verifique a conexão', 'err');
+  }
+  return r;
+}
+
 const _api = {
-  get:  p    => fetch(API_URL+p).then(r=>r.ok?r.json():null).catch(()=>null),
-  post: (p,b) => fetch(API_URL+p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).catch(()=>null),
-  put:  (p,b) => fetch(API_URL+p,{method:'PUT', headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).catch(()=>null),
-  del:  p    => fetch(API_URL+p,{method:'DELETE'}).catch(()=>null),
+  get: async p => {
+    try {
+      const headers = {};
+      if (_token.get()) headers['Authorization'] = 'Bearer ' + _token.get();
+      const r = await fetch(API_URL+p, { headers });
+      return r.ok ? r.json() : null;
+    } catch { return null; }
+  },
+  post: (p,b) => _escrever('POST', p, b),
+  put:  (p,b) => _escrever('PUT', p, b),
+  del:  p     => _escrever('DELETE', p),
 };
 
 async function carregarDados() {
@@ -93,6 +209,11 @@ const DB = {
   pags: {
     list: ()  => S.cache.pags || [],
     save: p   => { const l=S.cache.pags; const i=l.findIndex(x=>x.id===p.id); i>=0?l[i]=p:l.push(p); _api.post('/api/pagamentos',p); },
+    // Aprovar/rejeitar — vai por rota própria protegida por token (a de criação é pública, só cria 'pendente')
+    setStatus: (id, status) => {
+      const p = S.cache.pags.find(x=>x.id===id); if (p) p.status = status;
+      _api.put(`/api/pagamentos/${id}/status`, { status });
+    },
   },
   usuarios: {
     list: ()  => S.cache.usuarios || [],
@@ -123,11 +244,13 @@ const AUTH = {
       : v.trim() ? 'Informe o nome do seu grupo de bolão' : 'Digite seu nome para entrar';
   },
 
-  // Chama o endpoint de login e devolve o JSON mesmo em resposta de erro (401/429)
+  // Chama o endpoint de login, guarda o token se der certo, e devolve o JSON mesmo em erro (401/429)
   async _checarSenha(login, senha) {
     const resp = await _api.post('/api/auth/login', { login, senha });
     if (!resp) return { ok:false, error:'Falha de conexão com o servidor.' };
-    return resp.json().catch(() => ({ ok:false, error:'Falha de conexão com o servidor.' }));
+    const data = await resp.json().catch(() => ({ ok:false, error:'Falha de conexão com o servidor.' }));
+    if (data?.ok && data.token) _token.set(data.token);
+    return data;
   },
 
   async entrar() {
@@ -164,6 +287,7 @@ const AUTH = {
     const err = $('login-err');
     if (err) { err.hidden=false; err.style.color='#aaa'; err.textContent='⏳ Conectando ao servidor...'; }
     await carregarDados();
+    _filaReprocessar(); // reenvia o que ficou pendente de uma sessão anterior offline
     if (err) { err.hidden=true; err.style.color=''; }
 
     if (S.user.role !== 'dev') {
@@ -199,6 +323,7 @@ const AUTH = {
 
   sair() {
     sessionStorage.removeItem('ltr_s');
+    _token.clear();
     S.user = null;
     $('shell').hidden = true;
     $('nav-user').hidden = true;
@@ -1537,8 +1662,8 @@ const R = {
     }
     $('view-pagamentos').innerHTML=`<div class="sectt mb4">Comprovantes por grupo</div>${html}`;
   },
-  _aPag(id){const p=DB.pags.list().find(x=>x.id===id);if(!p)return; p.status='aprovado'; DB.pags.save(p); R._pagamentos();},
-  _rPag(id){const p=DB.pags.list().find(x=>x.id===id);if(!p)return; p.status='rejeitado'; DB.pags.save(p); R._pagamentos();},
+  _aPag(id){ DB.pags.setStatus(id,'aprovado'); R._pagamentos(); },
+  _rPag(id){ DB.pags.setStatus(id,'rejeitado'); R._pagamentos(); },
 
   _mComp(bid) {
     const b=DB.boloes.get(bid);
@@ -1676,13 +1801,13 @@ const BOT = {
 
   async conectar() {
     botStatusEl('🟡 Conectando...');
-    await fetch(API_URL + '/api/wpp/conectar', { method: 'POST' });
+    await _api.post('/api/wpp/conectar');
     BOT._iniciarPolling();
   },
 
   async desconectar() {
     if (!confirm('Desconectar o bot do WhatsApp? Precisará escanear o QR novamente para reconectar.')) return;
-    await fetch(API_URL + '/api/wpp/desconectar', { method: 'POST' });
+    await _api.post('/api/wpp/desconectar');
     BOT._status = 'desconectado'; BOT._qr = null;
     BOT._pararPolling();
     R._controle();
@@ -1696,11 +1821,7 @@ const BOT = {
   },
 
   async vincularGrupo(grupoId, jid) {
-    await fetch(API_URL + `/api/grupos/${grupoId}/jid`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jid }),
-    });
+    await _api.put(`/api/grupos/${grupoId}/jid`, { jid });
     const g = S.cache.grupos.find(x => x.id === grupoId);
     if (g) g.jid = jid;
   },
@@ -1708,14 +1829,9 @@ const BOT = {
   async enviarGrupos(grupos, mensagem) {
     const targets = grupos.map(g => g.jid).filter(Boolean);
     if (!targets.length) return { ok: false, error: 'sem_jid' };
-    try {
-      const r = await fetch(API_URL + '/api/wpp/enviar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targets, mensagem }),
-      });
-      return await r.json();
-    } catch (e) { return { ok: false, error: e.message }; }
+    const r = await _api.post('/api/wpp/enviar', { targets, mensagem });
+    if (!r) return { ok: false, error: 'Falha de conexão.' };
+    return await r.json().catch(() => ({ ok: false, error: 'Resposta inválida.' }));
   },
 
   _iniciarPolling() {
@@ -2134,30 +2250,21 @@ const WPP = {
     const mensagem = document.getElementById('cad-msg')?.value?.trim() || '';
     MODAL.close();
     MODAL.open(`<div class="m-title">🚀 Ativando cadastro...</div><div class="loading mt16"><div class="spinner"></div></div>`);
-    try {
-      const r = await fetch(API_URL + '/api/wpp/iniciar-cadastro', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ grupos: selecionados, mensagem: mensagem || undefined }),
-      });
-      const d = await r.json();
-      MODAL.close();
-      if (!d.ok) { alert('Erro: ' + (d.error||'Tente novamente.')); return; }
-      alert(`✅ Cadastro automático ativado!\n\nMensagem enviada para ${selecionados.length} grupo${selecionados.length>1?'s':''}.\nQuem responder com o nome será cadastrado automaticamente.`);
-      WPP._atualizarCadastroStatus();
-    } catch (e) {
-      MODAL.close();
-      alert('Erro de conexão: ' + e.message);
-    }
+    const r = await _api.post('/api/wpp/iniciar-cadastro', { grupos: selecionados, mensagem: mensagem || undefined });
+    MODAL.close();
+    if (!r) { alert('Erro de conexão.'); return; }
+    const d = await r.json().catch(() => ({ ok: false }));
+    if (!d.ok) { alert('Erro: ' + (d.error||'Tente novamente.')); return; }
+    alert(`✅ Cadastro automático ativado!\n\nMensagem enviada para ${selecionados.length} grupo${selecionados.length>1?'s':''}.\nQuem responder com o nome será cadastrado automaticamente.`);
+    WPP._atualizarCadastroStatus();
   },
 
   async _encerrarCadastro() {
     if (!confirm('Encerrar o cadastro automático?\nO bot enviará uma mensagem de encerramento nos grupos.')) return;
-    try {
-      await fetch(API_URL + '/api/wpp/encerrar-cadastro', { method: 'POST' });
-      clearInterval(WPP._cadTimer);
-      WPP._atualizarCadastroStatus();
-    } catch (e) { alert('Erro: ' + e.message); }
+    const r = await _api.post('/api/wpp/encerrar-cadastro');
+    if (!r || !r.ok) { alert('Erro ao encerrar cadastro. Tente novamente.'); return; }
+    clearInterval(WPP._cadTimer);
+    WPP._atualizarCadastroStatus();
   },
 
   _togglePart(p, on) {

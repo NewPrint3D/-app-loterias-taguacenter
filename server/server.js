@@ -4,12 +4,14 @@ const { Pool } = require('pg');
 const cors = require('cors');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.set('trust proxy', 1); // Render fica atrás de proxy — necessário para req.ip correto
-app.use(cors());
+// X-Token-Renovado precisa estar exposto, senão o navegador não deixa o front ler o header
+app.use(cors({ exposedHeaders: ['X-Token-Renovado'] }));
 app.use(express.json({ limit: '10mb' }));
 
 const pool = new Pool({
@@ -19,6 +21,38 @@ const pool = new Pool({
 
 // ---- HEALTH ----
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+// =============================================
+// JWT — expira em 1h sem uso, com renovação deslizante
+// =============================================
+// JWT_SECRET vem de env var no Render. Fallback fixo só pra não travar o dev local
+// (não regenerar aleatório aqui — isso invalidaria todas as sessões a cada restart do servidor).
+const JWT_SECRET = process.env.JWT_SECRET || 'apploterias-taguacenter-dev-secret-local';
+if (!process.env.JWT_SECRET) {
+  console.warn('⚠️  JWT_SECRET não definido — usando fallback fixo. Configure a env var no Render (senão qualquer um que veja este código pode forjar tokens de admin).');
+}
+const JWT_EXPIRES_IN = '1h';
+const assinarToken = role => jwt.sign({ role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+
+// Rotas de escrita usadas por quem não tem login (cliente sem senha) — ficam de fora do gate.
+// Toda rota pública nova precisa ser adicionada aqui E comentada no próprio app.post/put dela.
+const ROTAS_ESCRITA_PUBLICAS = new Set(['/api/auth/login', '/api/pagamentos', '/api/config/log']);
+
+app.use((req, res, next) => {
+  if (!['POST', 'PUT', 'DELETE'].includes(req.method)) return next();
+  if (ROTAS_ESCRITA_PUBLICAS.has(req.path)) return next();
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  if (!token) return res.status(401).json({ ok: false, error: 'Sessão expirada. Faça login novamente.' });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.usuario = payload;
+    res.setHeader('X-Token-Renovado', assinarToken(payload.role)); // renovação deslizante
+    next();
+  } catch {
+    res.status(401).json({ ok: false, error: 'Sessão expirada. Faça login novamente.' });
+  }
+});
 
 // ---- AUTH (admin / dev) ----
 // Hashes vêm de env vars no Render (ADMIN_SENHA_HASH / DEV_SENHA_HASH).
@@ -49,7 +83,7 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(401).json({ ok: false, error: 'Senha incorreta.' });
   }
   _loginTentativas.delete(ip);
-  res.json({ ok: true, role: login, nome: _loginNomes[login] });
+  res.json({ ok: true, role: login, nome: _loginNomes[login], token: assinarToken(login) });
 });
 
 // Headers de navegador — a Caixa bloqueia (403) requisições sem eles vindas de servidor
@@ -176,14 +210,29 @@ app.get('/api/pagamentos', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Rota pública (cliente sem login envia comprovante) — só cria, sempre como 'pendente'.
+// Nunca aceita status do corpo da requisição: sem isso, qualquer um poderia aprovar
+// o próprio pagamento (ou de outro) reenviando o mesmo id com status='aprovado'.
 app.post('/api/pagamentos', async (req, res) => {
-  const { id, bolao_id, membro, concurso, img, data, status } = req.body;
+  const { id, bolao_id, membro, concurso, img, data } = req.body;
   try {
     await pool.query(
-      `INSERT INTO pagamentos(id,bolao_id,membro,concurso,img,data,status) VALUES($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT(id) DO UPDATE SET status=$7`,
-      [id, bolao_id, membro, concurso||0, img||null, data||'', status||'pendente']
+      `INSERT INTO pagamentos(id,bolao_id,membro,concurso,img,data,status) VALUES($1,$2,$3,$4,$5,$6,'pendente')
+       ON CONFLICT(id) DO NOTHING`,
+      [id, bolao_id, membro, concurso||0, img||null, data||'']
     );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Aprovar/rejeitar comprovante — ação de admin, exige token (não está em ROTAS_ESCRITA_PUBLICAS)
+app.put('/api/pagamentos/:id/status', async (req, res) => {
+  const { status } = req.body;
+  if (!['pendente','aprovado','rejeitado'].includes(status)) {
+    return res.status(400).json({ error: 'Status inválido' });
+  }
+  try {
+    await pool.query('UPDATE pagamentos SET status=$1 WHERE id=$2', [status, req.params.id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -237,6 +286,7 @@ app.put('/api/config', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Pública (em ROTAS_ESCRITA_PUBLICAS) — disparada em todo login, inclusive cliente sem token
 app.post('/api/config/log', async (req, res) => {
   const { m } = req.body;
   try {
