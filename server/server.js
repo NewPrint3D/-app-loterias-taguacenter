@@ -101,19 +101,106 @@ const CAIXA_HEADERS = {
   'Referer': 'https://loterias.caixa.gov.br/Paginas/Mega-Sena.aspx',
   'Origin': 'https://loterias.caixa.gov.br',
 };
+const CAIXA_TIMEOUT_MS_EXIBICAO = 10000;
 
-// ---- PROXY CAIXA (evita CORS no frontend) ----
+// Converte a resposta da loteriascaixa-api pro formato bruto da Caixa (o mesmo que o frontend já
+// sabe interpretar) — assim o frontend não precisa saber de onde veio o dado.
+function paraFormatoCaixaBruto(d) {
+  return {
+    numero: d.concurso,
+    dataApuracao: d.data,
+    listaDezenas: d.dezenas,
+    acumulado: !!d.acumulou,
+    listaRateioPremio: (d.premiacoes || []).map(f => ({
+      descricaoFaixa: f.descricao, faixa: f.faixa,
+      numeroDeGanhadores: f.ganhadores, valorPremio: f.valorPremio,
+    })),
+    valorEstimadoProximoConcurso: d.valorEstimadoProximoConcurso || 0,
+    dataProximoConcurso: d.dataProximoConcurso || null,
+    numeroConcursoProximo: d.proximoConcurso || null,
+  };
+}
+
+// Cadeia de fontes pra exibição de resultados (home, resultados, IA, histórico) — diferente da
+// cadeia usada pela conferência automática porque aqui PRECISA preservar os campos do próximo
+// concurso (número, data, prêmio estimado), que a conferência descarta por não precisar deles.
+// allorigins/corsproxy não entram aqui: já não funcionam de servidor (ver conferência automática),
+// e não devem rodar do navegador tampouco — por isso o frontend passou a chamar esta rota em vez
+// de tentar os proxies ele mesmo (causava resultados desatualizados/mock quando os proxies falhavam).
+const FONTES_EXIBICAO = [
+  {
+    nome: 'guidi',
+    buscar: async (loteria, concurso) => {
+      const r = await fetch(`https://api.guidi.dev.br/loteria/${loteria}/${concurso || 'ultimo'}`, { signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS_EXIBICAO) });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return (d && Array.isArray(d.listaDezenas) && d.listaDezenas.length) ? d : null;
+    },
+  },
+  {
+    nome: 'loteriascaixa-api',
+    buscar: async (loteria, concurso) => {
+      const r = await fetch(`https://loteriascaixa-api.herokuapp.com/api/${loteria}/${concurso || 'latest'}`, { signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS_EXIBICAO) });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return (d && Array.isArray(d.dezenas) && d.dezenas.length) ? paraFormatoCaixaBruto(d) : null;
+    },
+  },
+  {
+    nome: 'caixa-direto',
+    buscar: async (loteria, concurso) => {
+      const url = `https://servicebus2.caixa.gov.br/portaldeloterias/api/${loteria}/${concurso || ''}`;
+      const r = await fetch(url, { headers: CAIXA_HEADERS, signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS_EXIBICAO) });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return (d && Array.isArray(d.listaDezenas) && d.listaDezenas.length) ? d : null;
+    },
+  },
+];
+
+async function buscarResultadoParaExibicao(loteria, concurso) {
+  for (const fonte of FONTES_EXIBICAO) {
+    try {
+      const d = await fonte.buscar(loteria, concurso);
+      if (d) return d;
+    } catch (e) {
+      console.log(`Exibição: fonte "${fonte.nome}" falhou pra ${loteria}/${concurso || 'último'} — ${e.message}`);
+    }
+  }
+  return null;
+}
+
+// Cache em memória (90s) + coalescing de requisições concorrentes pra mesma chave — sem isso,
+// a Home carrega 7 loterias em paralelo e cada usuário/aba aberta ao mesmo tempo multiplica as
+// chamadas externas (guidi falha sempre por bloqueio de país, então tudo cai em loteriascaixa-api,
+// uma API gratuita — várias pessoas abrindo o app junto poderia sobrecarregá-la sem necessidade,
+// já que o resultado de um concurso não muda de um minuto pro outro).
+const CACHE_EXIBICAO_TTL_MS = 90 * 1000;
+const _cacheExibicao = new Map(); // chave -> { data, expiraEm }
+const _emAndamentoExibicao = new Map(); // chave -> Promise (evita disparar 2 buscas iguais ao mesmo tempo)
+
+async function buscarResultadoParaExibicaoComCache(loteria, concurso) {
+  const chave = `${loteria}/${concurso || 'ultimo'}`;
+  const cacheado = _cacheExibicao.get(chave);
+  if (cacheado && cacheado.expiraEm > Date.now()) return cacheado.data;
+  if (_emAndamentoExibicao.has(chave)) return _emAndamentoExibicao.get(chave);
+
+  const promessa = buscarResultadoParaExibicao(loteria, concurso)
+    .then(data => {
+      if (data) _cacheExibicao.set(chave, { data, expiraEm: Date.now() + CACHE_EXIBICAO_TTL_MS });
+      return data;
+    })
+    .finally(() => _emAndamentoExibicao.delete(chave));
+  _emAndamentoExibicao.set(chave, promessa);
+  return promessa;
+}
+
+// ---- PROXY CAIXA (usado pelo frontend pra home, resultados, IA e histórico) ----
 app.get('/api/caixa/:loteria/:concurso?', async (req, res) => {
   const { loteria, concurso } = req.params;
-  const url = `https://servicebus2.caixa.gov.br/portaldeloterias/api/${loteria}/${concurso || ''}`;
-  try {
-    const r = await fetch(url, { headers: CAIXA_HEADERS });
-    if (!r.ok) { res.status(r.status).json({ error: 'Caixa retornou ' + r.status }); return; }
-    const data = await r.json();
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  const data = await buscarResultadoParaExibicaoComCache(loteria, concurso);
+  if (!data) return res.status(502).json({ error: 'Nenhuma fonte de resultado respondeu.' });
+  res.json(data);
 });
 
 // ---- GRUPOS ----

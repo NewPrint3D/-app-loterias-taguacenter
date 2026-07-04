@@ -422,8 +422,21 @@ const SEED = {
 // =============================================
 const API = {
   _BASE: 'https://servicebus2.caixa.gov.br/portaldeloterias/api/',
-  // JSON bruto (formato Caixa) via proxies — só funciona a partir do navegador (server-side é bloqueado)
+  // Resultado pro uso geral (home, resultados, IA, histórico) — busca pelo NOSSO backend, que já
+  // tem uma cadeia de 3 fontes confiável (guidi → loteriascaixa-api → Caixa direto). Os proxies
+  // allorigins/corsproxy direto do navegador ficaram instáveis (allorigins caiu, corsproxy ficou
+  // sujeito a rate-limit) e causavam fallback pro MOCK de 2024 em parte das loterias.
   async _buscarBruto(lt, conc='') {
+    try {
+      const r = await fetch(`${API_URL}/api/caixa/${lt}/${conc}`);
+      if (!r.ok) return null;
+      const data = await r.json();
+      return (data && data.numero) ? data : null;
+    } catch { return null; }
+  },
+  // Só pro RELAY (quando as 3 fontes do PRÓPRIO backend já falharam) — precisa buscar direto do
+  // navegador via proxy, senão delegaria de volta pro mesmo backend que já não conseguiu.
+  async _buscarBrutoViaProxy(lt, conc='') {
     const caixaUrl = API._BASE + lt + '/' + conc;
     const proxies = [
       `https://api.allorigins.win/get?url=${encodeURIComponent(caixaUrl)}`,
@@ -452,9 +465,10 @@ const API = {
       premio:r.listaRateioPremio?.[0]?.valorPremio??0, prox:r.valorEstimadoProximoConcurso??0,
       dataProxConcurso:r.dataProximoConcurso||null, numProxConcurso:r.numeroConcursoProximo||null };
   },
-  // Formato completo (todas as faixas de prêmio) usado pra retransmitir a conferência de um bolão pro backend
+  // Formato completo (todas as faixas de prêmio) usado pra retransmitir a conferência de um bolão pro backend.
+  // Usa _buscarBrutoViaProxy (não _buscarBruto) — esse fluxo só roda quando o backend já tentou e falhou.
   async fetchParaConferencia(lt, conc) {
-    const d = await API._buscarBruto(lt, conc);
+    const d = await API._buscarBrutoViaProxy(lt, conc);
     if (!d || !d.listaDezenas?.length) return null;
     return {
       concurso: d.numero,
@@ -629,6 +643,7 @@ const R = {
       const p=r.prox||r.premio||0;
       el.innerHTML=`${r.acumulado?'<span class="lt-acum">ACUMULADO</span>':''}
         ${p?`<div class="lt-premio">${fmtPremio(p)}</div>`:''}
+        ${r.numProxConcurso?`<div class="lt-data-card">Conc. #${r.numProxConcurso}</div>`:''}
         ${r.dataProxConcurso?`<div class="lt-data-card">📅 ${r.dataProxConcurso}</div>`:''}`;
     }));
   },
@@ -701,6 +716,7 @@ const R = {
       el.innerHTML = `
         ${r.acumulado ? '<span class="lt-acum">ACUM.</span>' : ''}
         ${p ? `<div class="lt-premio">${fmtPremio(p)}</div>` : ''}
+        ${r.numProxConcurso ? `<div class="lt-data-card">Conc. #${r.numProxConcurso}</div>` : ''}
         ${r.dataProxConcurso ? `<div class="lt-data-card">📅 ${r.dataProxConcurso}</div>` : ''}`;
     }));
 
@@ -745,7 +761,7 @@ const R = {
         </div>
         ${r.prox ? `
         <div class="hres-prox">
-          <span class="txs muted">Próximo estimado:</span>
+          <span class="txs muted">${r.numProxConcurso?`Concurso #${r.numProxConcurso} — `:''}Próximo estimado:</span>
           <span class="txs fw7" style="color:${lt.cor}">${fmtPremio(r.prox)}</span>
           ${r.dataProxConcurso ? `<span class="txs muted">· 📅 ${r.dataProxConcurso}</span>` : ''}
         </div>` : ''}
@@ -1025,7 +1041,7 @@ const R = {
   _tRes(dados,lt,badge) {
     $('tab-c').innerHTML=`
       <div class="fxb mb12"><div class="sectt">Últimos 3 sorteios</div>${badge}</div>
-      ${dados.slice(0,3).map(r=>`
+      ${dados.slice(0,3).map((r,i)=>`
         <div class="res-card">
           <div class="res-top"><span>Concurso #${r.numero||r.concurso||'—'}</span><span>${r.data||'—'}</span></div>
           <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}</div>
@@ -1033,6 +1049,11 @@ const R = {
             <span>${r.acumulado?'<span class="badge b-acum">Acumulado!</span>':`${r.ganhadores??0} ganhador${r.ganhadores!==1?'es':''}`}</span>
             <span>${r.premio?fmtPremio(r.premio):''}</span>
           </div>
+          ${i===0&&(r.prox||r.numProxConcurso||r.dataProxConcurso)?`
+          <div class="fxb txs muted mt4">
+            <span>${r.numProxConcurso?`Próximo concurso #${r.numProxConcurso}`:'Próximo concurso'}${r.dataProxConcurso?` · 📅 ${r.dataProxConcurso}`:''}</span>
+            <span style="color:${lt.cor};font-weight:700">${r.prox?fmtPremio(r.prox):''}</span>
+          </div>`:''}
         </div>`).join('')}`;
   },
 
@@ -1090,8 +1111,12 @@ const R = {
           <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}</div>
           <div class="fxb txs muted mt8">
             <span>${r.acumulado?'🔴 Acumulado':`${r.ganhadores??0} ganhador${r.ganhadores!==1?'es':''}`}</span>
-            <span>${r.prox?`Próximo: ${fmtPremio(r.prox)}`:''}</span>
           </div>
+          ${(r.prox||r.numProxConcurso||r.dataProxConcurso)?`
+          <div class="fxb txs muted mt4">
+            <span>${r.numProxConcurso?`Próximo concurso #${r.numProxConcurso}`:'Próximo concurso'}${r.dataProxConcurso?` · 📅 ${r.dataProxConcurso}`:''}</span>
+            <span style="color:${lt.cor};font-weight:700">${r.prox?fmtPremio(r.prox):''}</span>
+          </div>`:''}
         </div>`).join('');
   },
 
