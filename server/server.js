@@ -19,6 +19,14 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+// Normaliza telefone pra só dígitos com DDI 55 (espelha normalizarFone() do frontend)
+function normalizarFoneServidor(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.length <= 11) d = '55' + d;
+  return d;
+}
+
 // ---- HEALTH ----
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -275,12 +283,12 @@ app.get('/api/config', async (req, res) => {
 });
 
 app.put('/api/config', async (req, res) => {
-  const { bloqueado, msg, cliente, licenca, validade } = req.body;
+  const { bloqueado, msg, cliente, licenca, validade, admin_fone } = req.body;
   try {
     await pool.query(
-      `INSERT INTO config(id,bloqueado,msg,cliente,licenca,validade,logs) VALUES(1,$1,$2,$3,$4,$5,'[]')
-       ON CONFLICT(id) DO UPDATE SET bloqueado=$1,msg=$2,cliente=$3,licenca=$4,validade=$5`,
-      [bloqueado||false, msg||'', cliente||'Demo', licenca||'DEMO-2024', validade||'2025-12-31']
+      `INSERT INTO config(id,bloqueado,msg,cliente,licenca,validade,logs,admin_fone) VALUES(1,$1,$2,$3,$4,$5,'[]',$6)
+       ON CONFLICT(id) DO UPDATE SET bloqueado=$1,msg=$2,cliente=$3,licenca=$4,validade=$5,admin_fone=$6`,
+      [bloqueado||false, msg||'', cliente||'Demo', licenca||'DEMO-2024', validade||'2025-12-31', normalizarFoneServidor(admin_fone)]
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -311,6 +319,8 @@ try { _pinoLog = require('pino')({ level: 'silent' }); } catch { _pinoLog = unde
 
 // Migração: coluna jid nos grupos
 pool.query(`ALTER TABLE grupos ADD COLUMN IF NOT EXISTS jid TEXT DEFAULT ''`).catch(() => {});
+// Migração: WhatsApp do lotérico pra aviso instantâneo de resultado (antes de avisar os grupos)
+pool.query(`ALTER TABLE config ADD COLUMN IF NOT EXISTS admin_fone TEXT DEFAULT ''`).catch(() => {});
 
 // Tabelas persistentes
 pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`).catch(() => {});
@@ -781,24 +791,52 @@ function conferirJogos(numeros, dezenasSorteadas, premiacoes) {
   return { jogos, maiorAcerto, premioTotal, premiado: premioTotal > 0 };
 }
 
+const AVISO_GRUPO_DELAY_MS = 5 * 60 * 1000; // 5 minutos entre avisar o lotérico e avisar o grupo
+
+function montarMensagemResultado(b, resultado) {
+  const nomeLt = NOMES_LOTERIA[b.loteria] || b.loteria;
+  const fmtMoeda = v => v.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+  return resultado.premiado
+    ? `🎉 PREMIADO! Bolão ${b.nome} acertou ${resultado.maiorAcerto} pontos na ${nomeLt}! Prêmio total: R$ ${fmtMoeda(resultado.premioTotal)} — R$ ${fmtMoeda(resultado.rateioPorCota)} por cota. Procure a lotérica!`
+    : `📊 Resultado ${nomeLt} concurso ${b.concurso}: ${resultado.dezenas.join(' - ')}. Nosso bolão fez ${resultado.maiorAcerto} acertos. Não foi dessa vez — próximo bolão já disponível! 🍀`;
+}
+
+// Mensagem pro grupo do bolão — só sai AVISO_GRUPO_DELAY_MS depois do aviso instantâneo ao lotérico.
+// Devolve true/false pro chamador saber se REALMENTE enviou (bot desconectado ou grupo sem jid
+// não deve ser marcado como "enviado" — precisa poder tentar de novo no próximo minuto).
 async function enviarResultadoWhatsApp(b, resultado) {
-  if (!botSock || botStatus !== 'conectado') return;
+  if (!botSock || botStatus !== 'conectado') return false;
   try {
     const g = await pool.query('SELECT jid FROM grupos WHERE nome=$1', [b.grupo]);
     const jid = g.rows[0]?.jid;
-    if (!jid) return;
-    const nomeLt = NOMES_LOTERIA[b.loteria] || b.loteria;
-    const fmtMoeda = v => v.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
-    const msg = resultado.premiado
-      ? `🎉 PREMIADO! Bolão ${b.nome} acertou ${resultado.maiorAcerto} pontos na ${nomeLt}! Prêmio total: R$ ${fmtMoeda(resultado.premioTotal)} — R$ ${fmtMoeda(resultado.rateioPorCota)} por cota. Procure a lotérica!`
-      : `📊 Resultado ${nomeLt} concurso ${b.concurso}: ${resultado.dezenas.join(' - ')}. Nosso bolão fez ${resultado.maiorAcerto} acertos. Não foi dessa vez — próximo bolão já disponível! 🍀`;
-    await botSock.sendMessage(jid, { text: msg });
+    if (!jid) return false;
+    await botSock.sendMessage(jid, { text: montarMensagemResultado(b, resultado) });
+    return true;
   } catch (e) {
-    console.error('Conferência: falha ao enviar mensagem —', e.message);
+    console.error('Conferência: falha ao enviar mensagem no grupo —', e.message);
+    return false;
   }
 }
 
-// Aplica um resultado já normalizado a um bolão (usado tanto pelo cron quanto pelo relay do navegador)
+// Aviso instantâneo, direto no WhatsApp pessoal do lotérico — antes de qualquer grupo saber.
+// É o que dá credibilidade: o dono nunca é o último a ficar sabendo do resultado do próprio bolão.
+async function enviarAvisoInstantaneoAdmin(b, resultado) {
+  if (!botSock || botStatus !== 'conectado') return;
+  try {
+    const c = await pool.query('SELECT admin_fone FROM config WHERE id=1');
+    const fone = c.rows[0]?.admin_fone;
+    if (!fone) return; // sem número configurado no Painel Dev — só o grupo recebe (com atraso)
+    const nomeLt = NOMES_LOTERIA[b.loteria] || b.loteria;
+    const msg = `🔔 Aviso instantâneo — só você viu ainda.\n\n${montarMensagemResultado(b, resultado)}\n\nO grupo "${b.grupo}" recebe esse resultado em 5 minutos.`;
+    await botSock.sendMessage(`${fone}@s.whatsapp.net`, { text: msg });
+  } catch (e) {
+    console.error('Conferência: falha ao enviar aviso instantâneo ao admin —', e.message);
+  }
+}
+
+// Aplica um resultado já normalizado a um bolão (usado tanto pelo cron quanto pelo relay do navegador).
+// Ordem: 1) grava o resultado e avisa o lotérico na hora; 2) agenda o aviso do grupo pra 5 min depois
+// (despachado por despacharAvisosGrupo, não por um setTimeout solto — sobrevive a um restart do servidor).
 async function aplicarResultado(b, resultadoNorm, fonte) {
   const numeros = typeof b.numeros === 'string' ? JSON.parse(b.numeros || '[]') : (b.numeros || []);
   const { jogos, maiorAcerto, premioTotal, premiado } = conferirJogos(numeros, resultadoNorm.dezenas, resultadoNorm.premiacoes);
@@ -809,6 +847,8 @@ async function aplicarResultado(b, resultadoNorm, fonte) {
     rateioPorCota: premiado ? Math.round((premioTotal / (b.cotas_total || 1)) * 100) / 100 : 0,
     conferidoEm: new Date().toISOString(),
     fonte, // qual fonte respondeu — visível na API pra monitorar confiabilidade
+    avisoGrupoAgendadoPara: new Date(Date.now() + AVISO_GRUPO_DELAY_MS).toISOString(),
+    avisoGrupoEnviado: false,
   };
   // status só sai de 'ativo'/'aguardando_resultado' — evita conferir duas vezes se
   // cron, gatilho manual e relay do navegador se sobrepuserem
@@ -818,9 +858,49 @@ async function aplicarResultado(b, resultadoNorm, fonte) {
   );
   if (!upd.rowCount) return false; // outra execução já conferiu este bolão nesse meio-tempo
   console.log(`Conferência: bolão "${b.nome}" conferido via "${fonte}" — ${maiorAcerto} acertos, premiado=${premiado}`);
-  await enviarResultadoWhatsApp(b, resultado);
+  await enviarAvisoInstantaneoAdmin(b, resultado);
   return true;
 }
+
+// Roda a cada minuto: despacha pro grupo os resultados cujos 5 minutos de exclusividade do
+// lotérico já passaram. Consulta o estado gravado no banco (não memória do processo), então
+// sobrevive normalmente a um restart do servidor no meio da espera.
+//
+// Só marca avisoGrupoEnviado=true DEPOIS de confirmar que a mensagem realmente saiu — se o bot
+// estiver desconectado ou o grupo não tiver jid, fica pendente e tenta de novo no próximo minuto
+// (marcar antes e falhar depois faria perder o aviso pra sempre, de forma silenciosa).
+// A trava _despachandoAvisos já é suficiente pra evitar envio duplicado (processo único, Node
+// não roda dois ticks de cron em paralelo de verdade) — não precisa de reivindicação via SQL aqui.
+let _despachandoAvisos = false;
+async function despacharAvisosGrupo() {
+  if (_despachandoAvisos) return; // execução anterior ainda rodando (ex: rede lenta) — evita duplicar envio
+  _despachandoAvisos = true;
+  try {
+    // Filtra avisoGrupoEnviado=false já no SQL — sem isso a consulta cresceria sem limite
+    // conforme bolões conferidos forem se acumulando ao longo do tempo.
+    const boloes = (await pool.query(
+      `SELECT * FROM boloes WHERE status='conferido' AND (resultado->>'avisoGrupoEnviado')='false'`
+    )).rows;
+    const agora = Date.now();
+    for (const b of boloes) {
+      const resultado = typeof b.resultado === 'string' ? JSON.parse(b.resultado) : b.resultado;
+      if (!resultado.avisoGrupoAgendadoPara || new Date(resultado.avisoGrupoAgendadoPara).getTime() > agora) continue;
+      const enviado = await enviarResultadoWhatsApp(b, resultado);
+      if (!enviado) continue; // bot desconectado, grupo sem jid, ou falha no envio — retry no próximo minuto
+      resultado.avisoGrupoEnviado = true;
+      await pool.query(`UPDATE boloes SET resultado=$1 WHERE id=$2`, [JSON.stringify(resultado), b.id]);
+      console.log(`Conferência: aviso do grupo "${b.grupo}" enviado (bolão "${b.nome}").`);
+    }
+  } catch (e) {
+    console.error('Conferência: erro ao despachar avisos de grupo —', e.message);
+  } finally {
+    _despachandoAvisos = false;
+  }
+}
+cron.schedule('* * * * *', despacharAvisosGrupo, { timezone: 'America/Sao_Paulo' });
+// Roda uma vez no startup (com atraso pro bot ter chance de reconectar) — cobre o caso do
+// servidor ter reiniciado no meio da espera de 5 minutos de algum aviso pendente.
+setTimeout(despacharAvisosGrupo, 20000);
 
 async function conferirUmBolao(b) {
   try {

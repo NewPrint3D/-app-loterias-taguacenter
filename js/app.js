@@ -320,9 +320,26 @@ const AUTH = {
     R.ir('home');
     R._verificarPremios();
     RELAY.verificarPendentes();
+    AUTH._iniciarPollingResultados();
+  },
+
+  // Enquanto o admin/dev estiver com o app aberto (aba visível), busca por resultados novos
+  // a cada 60s — o aviso instantâneo "de verdade" já foi mandado no WhatsApp pessoal do lotérico
+  // pelo backend; isso aqui só faz o popup aparecer sem precisar deslogar/logar de novo.
+  _pollResultados: null,
+  _iniciarPollingResultados() {
+    if (AUTH._pollResultados) clearInterval(AUTH._pollResultados);
+    if (!AUTH.isAdmin()) return;
+    AUTH._pollResultados = setInterval(async () => {
+      if (document.visibilityState !== 'visible' || !S.user) return;
+      await carregarDados();
+      R._verificarPremios();
+      RELAY.verificarPendentes();
+    }, 60000);
   },
 
   sair() {
+    if (AUTH._pollResultados) { clearInterval(AUTH._pollResultados); AUTH._pollResultados = null; }
     sessionStorage.removeItem('ltr_s');
     _token.clear();
     S.user = null;
@@ -981,6 +998,9 @@ const R = {
         ${res.premiado
           ? `<div class="ia-aviso" style="border-color:var(--gold);color:var(--gold)">🎉 <strong>Premiado!</strong> Prêmio total ${fmt$(res.premioTotal)} — ${fmt$(res.rateioPorCota)} por cota.</div>`
           : `<div class="txs muted">Não foi dessa vez — próximo bolão já disponível!</div>`}
+        ${res.avisoGrupoAgendadoPara ? `<div class="txs muted mt8">${res.avisoGrupoEnviado
+              ? '✅ Grupo já avisado.'
+              : `⏳ Grupo será avisado às ${new Date(res.avisoGrupoAgendadoPara).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})} (você já sabe antes deles).`}</div>` : ''}
       </div>`:''}
       <div class="tabs">
         <button class="tab on" onclick="R._tab('resultados',this)">📋 Resultados</button>
@@ -1809,6 +1829,13 @@ const R = {
         <button class="btn btn-p btn-sm" onclick="DEV.saveMsg()">Salvar mensagem</button>
       </div>
       <div class="dev-panel">
+        <h3>🔔 Aviso Instantâneo de Resultado</h3>
+        <p class="txs muted mb8">Seu WhatsApp pessoal — recebe o resultado de cada bolão assim que o
+        sistema confere, <strong>5 minutos antes</strong> do grupo. Precisa do bot conectado.</p>
+        <div class="fg"><label>Seu número (com DDD)</label><input id="dev-fone" placeholder="61999999999" value="${c.admin_fone||''}"></div>
+        <button class="btn btn-p btn-sm" onclick="DEV.saveFoneAdmin()">Salvar número</button>
+      </div>
+      <div class="dev-panel">
         <h3>📋 Editar Licença</h3>
         <div class="fr">
           <div class="fg"><label>Cliente</label><input id="dev-cli" value="${c.cliente}"></div>
@@ -2533,6 +2560,17 @@ const DEV = {
   },
   saveMsg() {
     const c=DB.ctrl.get(); c.msg=$('dev-msg')?.value?.trim()||''; DB.ctrl.set(c); alert('Mensagem salva!');
+  },
+  saveFoneAdmin() {
+    const bruto = $('dev-fone')?.value||'';
+    const fone = normalizarFone(bruto);
+    // Celular BR com DDI: 13 dígitos (5561999999999). Fixo: 12. Fora disso, o número digitado
+    // provavelmente está incompleto/errado e o aviso instantâneo vai falhar silenciosamente.
+    if (fone && fone.length!==12 && fone.length!==13) {
+      if (!confirm(`"${bruto}" não parece um número completo com DDD (ficou "${fone}"). Salvar assim mesmo?`)) return;
+    }
+    const c=DB.ctrl.get(); c.admin_fone=fone; DB.ctrl.set(c);
+    alert(c.admin_fone ? 'Número salvo! Você passa a receber o resultado 5 min antes do grupo.' : 'Número removido — só o grupo vai receber o resultado.');
   },
   saveLic() {
     const c=DB.ctrl.get();

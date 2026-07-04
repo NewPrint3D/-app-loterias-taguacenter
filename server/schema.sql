@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS config (
   licenca  TEXT DEFAULT 'DEMO-2024',
   validade TEXT DEFAULT '2025-12-31',
   logs     JSONB DEFAULT '[]',
+  admin_fone TEXT DEFAULT '',
   CONSTRAINT config_single_row CHECK (id = 1)
 );
 
