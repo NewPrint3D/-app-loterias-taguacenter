@@ -850,7 +850,7 @@ const R = {
         <div class="jogo-header">
           <div>
             <div class="jogo-titulo">🎲 Zé Loteca gera seu jogo</div>
-            <div class="jogo-sub">Mistura inteligente de 🔥 quentes + 🧊 frios + aleatórios</div>
+            <div class="jogo-sub">Mistura inteligente de números 🔥 quentes + números 🧊 frios + aleatórios</div>
           </div>
           <span class="jogo-lt">${lt.emoji} ${lt.nome}</span>
         </div>
