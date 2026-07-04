@@ -319,6 +319,7 @@ const AUTH = {
     ZE.start();
     R.ir('home');
     R._verificarPremios();
+    RELAY.verificarPendentes();
   },
 
   sair() {
@@ -404,7 +405,8 @@ const SEED = {
 // =============================================
 const API = {
   _BASE: 'https://servicebus2.caixa.gov.br/portaldeloterias/api/',
-  async fetch(lt, conc='') {
+  // JSON bruto (formato Caixa) via proxies — só funciona a partir do navegador (server-side é bloqueado)
+  async _buscarBruto(lt, conc='') {
     const caixaUrl = API._BASE + lt + '/' + conc;
     const proxies = [
       `https://api.allorigins.win/get?url=${encodeURIComponent(caixaUrl)}`,
@@ -417,11 +419,14 @@ const API = {
           new Promise((_,rej)=>setTimeout(()=>rej('to'),5000)),
         ]);
         const data = r.contents ? JSON.parse(r.contents) : r;
-        const parsed = API.parse(data);
-        if (parsed) return parsed;
+        if (data && data.numero) return data;
       } catch {}
     }
     return null;
+  },
+  async fetch(lt, conc='') {
+    const data = await API._buscarBruto(lt, conc);
+    return data ? API.parse(data) : null;
   },
   parse(r) {
     if (!r||!r.listaDezenas) return null;
@@ -429,6 +434,21 @@ const API = {
       acumulado:r.acumulado, ganhadores:r.listaRateioPremio?.[0]?.numeroDeGanhadores??0,
       premio:r.listaRateioPremio?.[0]?.valorPremio??0, prox:r.valorEstimadoProximoConcurso??0,
       dataProxConcurso:r.dataProximoConcurso||null, numProxConcurso:r.numeroConcursoProximo||null };
+  },
+  // Formato completo (todas as faixas de prêmio) usado pra retransmitir a conferência de um bolão pro backend
+  async fetchParaConferencia(lt, conc) {
+    const d = await API._buscarBruto(lt, conc);
+    if (!d || !d.listaDezenas?.length) return null;
+    return {
+      concurso: d.numero,
+      data: d.dataApuracao || null,
+      dezenas: d.listaDezenas,
+      premiacoes: (d.listaRateioPremio||[]).map(f => {
+        const m = String(f.descricaoFaixa||'').match(/\d+/);
+        return { acertos: m?parseInt(m[0],10):null, ganhadores: f.numeroDeGanhadores||0, premio: f.valorPremio||0 };
+      }),
+      acumulou: !!d.acumulado,
+    };
   },
   async ultimos3(lt) {
     const u = await API.fetch(lt);
@@ -444,6 +464,34 @@ const API = {
     const ps = Array.from({length:19},(_,i)=>API.fetch(lt,u.numero-1-i));
     const rest = await Promise.all(ps);
     return [u,...rest].filter(Boolean);
+  },
+};
+
+// =============================================
+// RELAY DE CONFERÊNCIA — fallback final quando as 3 fontes do servidor falham
+// =============================================
+// Bolões marcados "aguardando_resultado" pelo cron (nenhuma fonte respondeu no servidor)
+// são retentados aqui: o navegador do admin não tem o bloqueio de IP/país que o servidor
+// tem, então busca o resultado com os mesmos proxies de sempre e retransmite pro backend conferir.
+const RELAY = {
+  async verificarPendentes() {
+    if (!AUTH.isAdmin()) return;
+    const pendentes = (S.cache.boloes||[]).filter(b => b.status === 'aguardando_resultado');
+    if (!pendentes.length) return;
+    let algumConferido = false;
+    for (const b of pendentes) {
+      try {
+        const resultado = await API.fetchParaConferencia(b.loteria, b.concurso);
+        if (!resultado || resultado.concurso !== b.concurso || !resultado.premiacoes.length) continue;
+        const resp = await _api.post('/api/resultados/relay', { loteria: b.loteria, concurso: b.concurso, resultado });
+        const d = resp ? await resp.json().catch(()=>null) : null;
+        if (d?.ok && d.conferidos) algumConferido = true;
+      } catch {}
+    }
+    if (algumConferido) {
+      await carregarDados();
+      R._verificarPremios();
+    }
   },
 };
 
@@ -863,6 +911,8 @@ const R = {
             ? (b.resultado?.premiado
                 ? `<span class="badge" style="background:rgba(245,158,11,.2);color:var(--gold)">🎉 Premiado</span>`
                 : `<span class="badge b-pend">Conferido</span>`)
+            : b.status==='aguardando_resultado'
+            ? `<span class="badge b-pend" title="As fontes automáticas ainda não confirmaram — abra o app logado como admin pra tentar de novo">⏳ Aguardando resultado</span>`
             : `<span class="badge b-${b.status==='ativo'?'ativo':'pend'}">${b.status}</span>`}
         </div>
         <div class="bl-row mt8"><span class="txs muted">${pg}/${b.membros.length} pagos</span><span class="txs muted">${b.numeros.length} jogo${b.numeros.length!==1?'s':''}</span></div>
@@ -927,7 +977,7 @@ const R = {
       <div class="card mb12" style="border:2px solid ${res.premiado?'var(--gold)':'var(--border)'}">
         <div class="sectt mb8">🎯 Resultado — Concurso #${b.concurso}</div>
         <div class="bolas">${res.dezenas.map(n=>`<span class="bola${acertadas.has(n)?' bola-hit':''}" style="${acertadas.has(n)?'':`background:${lt.cor}`}">${n}</span>`).join('')}</div>
-        <div class="txs muted mt8 mb8">Sorteio em ${res.dataApuracao||'—'} · Maior acerto: ${res.maiorAcerto}</div>
+        <div class="txs muted mt8 mb8">Sorteio em ${res.dataApuracao||'—'} · Maior acerto: ${res.maiorAcerto}${res.fonte?` · fonte: ${res.fonte}`:''}</div>
         ${res.premiado
           ? `<div class="ia-aviso" style="border-color:var(--gold);color:var(--gold)">🎉 <strong>Premiado!</strong> Prêmio total ${fmt$(res.premioTotal)} — ${fmt$(res.rateioPorCota)} por cota.</div>`
           : `<div class="txs muted">Não foi dessa vez — próximo bolão já disponível!</div>`}

@@ -685,36 +685,95 @@ const NOMES_LOTERIA = {
 
 const CAIXA_TIMEOUT_MS = 10000;
 
-// Busca direto da Caixa (com headers de navegador); cai pros proxies se a Caixa bloquear (403)
-async function buscarResultadoCaixa(loteria, concurso) {
-  const url = `https://servicebus2.caixa.gov.br/portaldeloterias/api/${loteria}/${concurso}`;
-  try {
-    const r = await fetch(url, { headers: CAIXA_HEADERS, signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS) });
-    if (r.ok) return await r.json();
-  } catch {}
-  const proxies = [
-    `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-    `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-  ];
-  for (const p of proxies) {
-    try {
-      const r = await fetch(p, { signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS) });
-      if (!r.ok) continue;
-      const j = await r.json();
-      const data = j.contents ? JSON.parse(j.contents) : j;
-      if (data && data.numero) return data;
-    } catch {}
-  }
-  return null;
+// ---- Normalização — cada fonte usa nomes de campo diferentes, tudo converge pra este formato:
+// { concurso, data, dezenas:[...], premiacoes:[{acertos,ganhadores,premio}], acumulou }
+
+// Formato bruto da Caixa (usado tanto pela Caixa direto quanto pelo espelho api.guidi.dev.br,
+// que só repassa o JSON original da Caixa)
+function normalizarCaixaBruto(d) {
+  if (!d || !Array.isArray(d.listaDezenas) || !d.listaDezenas.length) return null;
+  return {
+    concurso: d.numero,
+    data: d.dataApuracao || null,
+    dezenas: d.listaDezenas,
+    premiacoes: (d.listaRateioPremio || []).map(f => {
+      const m = String(f.descricaoFaixa || '').match(/\d+/);
+      return { acertos: m ? parseInt(m[0], 10) : null, ganhadores: f.numeroDeGanhadores || 0, premio: f.valorPremio || 0 };
+    }),
+    acumulou: !!d.acumulado,
+  };
 }
 
-// Confere cada jogo do bolão contra as dezenas sorteadas e calcula prêmio pela faixa real da Caixa
-function conferirJogos(numeros, dezenasSorteadas, faixas) {
+// Formato da loteriascaixa-api.herokuapp.com
+function normalizarLoteriasCaixaApi(d) {
+  if (!d || !Array.isArray(d.dezenas) || !d.dezenas.length) return null;
+  return {
+    concurso: d.concurso,
+    data: d.data || null,
+    dezenas: d.dezenas,
+    premiacoes: (d.premiacoes || []).map(f => {
+      const m = String(f.descricao || '').match(/\d+/);
+      return { acertos: m ? parseInt(m[0], 10) : null, ganhadores: f.ganhadores || 0, premio: f.valorPremio || 0 };
+    }),
+    acumulou: !!d.acumulou,
+  };
+}
+
+// Cadeia de fontes, na ordem de prioridade pedida. allorigins/corsproxy foram removidos —
+// não funcionam mais a partir de servidor (allorigins caiu, corsproxy passou a bloquear
+// requisições server-side no plano gratuito).
+const FONTES_RESULTADO = [
+  {
+    nome: 'guidi',
+    buscar: async (loteria, concurso) => {
+      const r = await fetch(`https://api.guidi.dev.br/loteria/${loteria}/${concurso}`, { signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS) });
+      if (!r.ok) return null;
+      return normalizarCaixaBruto(await r.json());
+    },
+  },
+  {
+    nome: 'loteriascaixa-api',
+    buscar: async (loteria, concurso) => {
+      const r = await fetch(`https://loteriascaixa-api.herokuapp.com/api/${loteria}/${concurso}`, { signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS) });
+      if (!r.ok) return null;
+      return normalizarLoteriasCaixaApi(await r.json());
+    },
+  },
+  {
+    nome: 'caixa-direto',
+    buscar: async (loteria, concurso) => {
+      const url = `https://servicebus2.caixa.gov.br/portaldeloterias/api/${loteria}/${concurso}`;
+      const r = await fetch(url, { headers: CAIXA_HEADERS, signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS) });
+      if (!r.ok) return null;
+      return normalizarCaixaBruto(await r.json());
+    },
+  },
+];
+
+// Tenta cada fonte em ordem; loga qual respondeu (ou que nenhuma respondeu) pra monitorar confiabilidade
+async function buscarResultadoLoteria(loteria, concurso) {
+  for (const fonte of FONTES_RESULTADO) {
+    try {
+      const resultado = await fonte.buscar(loteria, concurso);
+      if (resultado && resultado.dezenas.length && resultado.premiacoes.length) {
+        console.log(`Conferência: resultado de ${loteria}/${concurso} obtido via "${fonte.nome}".`);
+        return { fonte: fonte.nome, resultado };
+      }
+      console.log(`Conferência: fonte "${fonte.nome}" não tinha ${loteria}/${concurso} apurado ainda.`);
+    } catch (e) {
+      console.log(`Conferência: fonte "${fonte.nome}" falhou pra ${loteria}/${concurso} — ${e.message}`);
+    }
+  }
+  return null; // nenhuma das 3 fontes respondeu
+}
+
+// Confere cada jogo do bolão contra as dezenas sorteadas e calcula prêmio pela faixa real
+function conferirJogos(numeros, dezenasSorteadas, premiacoes) {
   const set = new Set(dezenasSorteadas);
   const jogos = numeros.map(jogo => {
     const acertos = jogo.filter(n => set.has(n)).length;
-    const faixa = faixas.find(f => f.acertos === acertos);
-    const premio = faixa && faixa.valorPremio > 0 ? faixa.valorPremio : 0;
+    const faixa = premiacoes.find(f => f.acertos === acertos);
+    const premio = faixa && faixa.premio > 0 ? faixa.premio : 0;
     return { numeros: jogo, acertos, premio };
   });
   const maiorAcerto = jogos.reduce((m, j) => Math.max(m, j.acertos), 0);
@@ -739,43 +798,44 @@ async function enviarResultadoWhatsApp(b, resultado) {
   }
 }
 
+// Aplica um resultado já normalizado a um bolão (usado tanto pelo cron quanto pelo relay do navegador)
+async function aplicarResultado(b, resultadoNorm, fonte) {
+  const numeros = typeof b.numeros === 'string' ? JSON.parse(b.numeros || '[]') : (b.numeros || []);
+  const { jogos, maiorAcerto, premioTotal, premiado } = conferirJogos(numeros, resultadoNorm.dezenas, resultadoNorm.premiacoes);
+  const resultado = {
+    dezenas: resultadoNorm.dezenas,
+    dataApuracao: resultadoNorm.data,
+    jogos, maiorAcerto, premioTotal, premiado,
+    rateioPorCota: premiado ? Math.round((premioTotal / (b.cotas_total || 1)) * 100) / 100 : 0,
+    conferidoEm: new Date().toISOString(),
+    fonte, // qual fonte respondeu — visível na API pra monitorar confiabilidade
+  };
+  // status só sai de 'ativo'/'aguardando_resultado' — evita conferir duas vezes se
+  // cron, gatilho manual e relay do navegador se sobrepuserem
+  const upd = await pool.query(
+    `UPDATE boloes SET resultado=$1, status='conferido' WHERE id=$2 AND status IN ('ativo','aguardando_resultado')`,
+    [JSON.stringify(resultado), b.id]
+  );
+  if (!upd.rowCount) return false; // outra execução já conferiu este bolão nesse meio-tempo
+  console.log(`Conferência: bolão "${b.nome}" conferido via "${fonte}" — ${maiorAcerto} acertos, premiado=${premiado}`);
+  await enviarResultadoWhatsApp(b, resultado);
+  return true;
+}
+
 async function conferirUmBolao(b) {
   try {
-    const dados = await buscarResultadoCaixa(b.loteria, b.concurso);
-    // dados.numero !== concurso: a Caixa às vezes devolve o último concurso conhecido
-    // em vez de erro quando o concurso pedido ainda não foi apurado
-    if (!dados || !dados.listaDezenas || dados.numero !== b.concurso) {
-      console.log(`Conferência: concurso ${b.concurso} de ${b.loteria} ainda não apurado — tenta na próxima execução.`);
+    const achado = await buscarResultadoLoteria(b.loteria, b.concurso);
+    // achado.resultado.concurso !== concurso: a fonte às vezes devolve o último concurso
+    // conhecido em vez de erro quando o concurso pedido ainda não foi apurado
+    if (!achado || achado.resultado.concurso !== b.concurso) {
+      console.log(`Conferência: nenhuma fonte tinha ${b.loteria}/${b.concurso} apurado — marcando aguardando_resultado.`);
+      await pool.query(
+        `UPDATE boloes SET status='aguardando_resultado' WHERE id=$1 AND status IN ('ativo','aguardando_resultado')`,
+        [b.id]
+      );
       return;
     }
-    // Sem faixas de rateio a apuração está incompleta — não dá pra saber se premiou. Tenta de novo depois.
-    if (!Array.isArray(dados.listaRateioPremio) || !dados.listaRateioPremio.length) {
-      console.log(`Conferência: concurso ${b.concurso} de ${b.loteria} sem rateio de prêmios ainda — tenta na próxima execução.`);
-      return;
-    }
-    const faixas = dados.listaRateioPremio.map(f => {
-      const m = String(f.descricaoFaixa || '').match(/\d+/);
-      return { acertos: m ? parseInt(m[0], 10) : null, valorPremio: f.valorPremio || 0 };
-    });
-    const numeros = typeof b.numeros === 'string' ? JSON.parse(b.numeros || '[]') : (b.numeros || []);
-    const { jogos, maiorAcerto, premioTotal, premiado } = conferirJogos(numeros, dados.listaDezenas, faixas);
-    const resultado = {
-      dezenas: dados.listaDezenas,
-      dataApuracao: dados.dataApuracao || null,
-      jogos, maiorAcerto, premioTotal, premiado,
-      rateioPorCota: premiado ? Math.round((premioTotal / (b.cotas_total || 1)) * 100) / 100 : 0,
-      conferidoEm: new Date().toISOString(),
-    };
-
-    // status só muda de 'ativo' pra 'conferido' se ainda estiver 'ativo' — evita processar
-    // duas vezes o mesmo bolão caso duas execuções (cron + gatilho manual) se sobreponham
-    const upd = await pool.query(
-      `UPDATE boloes SET resultado=$1, status='conferido' WHERE id=$2 AND status='ativo'`,
-      [JSON.stringify(resultado), b.id]
-    );
-    if (!upd.rowCount) return; // outra execução já conferiu este bolão nesse meio-tempo
-    console.log(`Conferência: bolão "${b.nome}" conferido — ${maiorAcerto} acertos, premiado=${premiado}`);
-    await enviarResultadoWhatsApp(b, resultado);
+    await aplicarResultado(b, achado.resultado, achado.fonte);
   } catch (e) {
     console.error(`Conferência: erro no bolão ${b.id} —`, e.message);
   }
@@ -790,7 +850,8 @@ async function conferirBoloes() {
   _conferenciaRodando = true;
   console.log('Conferência: iniciando verificação de resultados...');
   try {
-    const boloes = (await pool.query(`SELECT * FROM boloes WHERE status = 'ativo'`)).rows;
+    // Reprocessa 'ativo' (nunca tentado) e 'aguardando_resultado' (as 3 fontes falharam antes)
+    const boloes = (await pool.query(`SELECT * FROM boloes WHERE status IN ('ativo','aguardando_resultado')`)).rows;
     await Promise.allSettled(boloes.map(conferirUmBolao));
   } catch (e) {
     console.error('Conferência: erro ao buscar bolões —', e.message);
@@ -808,6 +869,28 @@ cron.schedule('0 22 * * *', conferirBoloes, { timezone: 'America/Sao_Paulo' });
 app.post('/api/boloes/conferir', async (req, res) => {
   try { await conferirBoloes(); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Fallback final: se as 3 fontes do servidor falharem, o bolão fica "aguardando_resultado".
+// O navegador do admin (que não tem o bloqueio de IP/país que o servidor tem) busca o
+// resultado com os proxies de sempre e retransmite pra cá conferir e disparar as mensagens.
+app.post('/api/resultados/relay', async (req, res) => {
+  const { loteria, concurso, resultado } = req.body || {};
+  if (!loteria || !concurso || !resultado || !Array.isArray(resultado.dezenas) || !resultado.dezenas.length
+      || !Array.isArray(resultado.premiacoes) || !resultado.premiacoes.length) {
+    return res.status(400).json({ ok: false, error: 'Dados de resultado incompletos ou inválidos.' });
+  }
+  try {
+    const boloes = (await pool.query(
+      `SELECT * FROM boloes WHERE loteria=$1 AND concurso=$2 AND status IN ('ativo','aguardando_resultado')`,
+      [loteria, concurso]
+    )).rows;
+    let conferidos = 0;
+    for (const b of boloes) {
+      if (await aplicarResultado(b, resultado, 'relay-navegador')) conferidos++;
+    }
+    res.json({ ok: true, conferidos });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));
