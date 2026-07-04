@@ -74,15 +74,6 @@ body {
   border-radius: var(--radius); padding: 32px 28px;
   width: min(380px, 95vw); text-align: center; box-shadow: var(--shadow);
 }
-.ze-sm {
-  width: 65px; height: 65px;
-  background: radial-gradient(circle at 32% 28%, #ffffff, #cbd5e1);
-  border-radius: 50%; margin: 0 auto 16px; position: relative;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  animation: ze-b .85s ease-in-out infinite alternate;
-  box-shadow: 0 0 20px rgba(255,255,255,.2);
-}
-.ze-sm::before { content:'13'; font-size:22px; font-weight:900; color:#1e293b; letter-spacing:-1px; }
 .login-box h2  { font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; }
 .login-sub     { color: var(--muted); font-size: .88rem; margin-bottom: 24px; }
 .field         { text-align: left; margin-bottom: 14px; }
