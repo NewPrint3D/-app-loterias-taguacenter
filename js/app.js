@@ -194,6 +194,7 @@ const AUTH = {
     SEED.init();
     ZE.start();
     R.ir('home');
+    R._verificarPremios();
   },
 
   sair() {
@@ -733,7 +734,11 @@ const R = {
         <div class="bl-meta">Concurso #${b.concurso} · ${b.membros.length} membros</div>
         <div class="bl-row">
           <span class="muted tsm">${b.cotas_total} cotas · ${fmt$(b.cotas_total*b.valor_cota)}</span>
-          <span class="badge b-${b.status==='ativo'?'ativo':'pend'}">${b.status}</span>
+          ${b.status==='conferido'
+            ? (b.resultado?.premiado
+                ? `<span class="badge" style="background:rgba(245,158,11,.2);color:var(--gold)">🎉 Premiado</span>`
+                : `<span class="badge b-pend">Conferido</span>`)
+            : `<span class="badge b-${b.status==='ativo'?'ativo':'pend'}">${b.status}</span>`}
         </div>
         <div class="bl-row mt8"><span class="txs muted">${pg}/${b.membros.length} pagos</span><span class="txs muted">${b.numeros.length} jogo${b.numeros.length!==1?'s':''}</span></div>
         ${admin?`<button class="btn-ico bl-del-btn" title="Excluir bolão" onclick="event.stopPropagation();R._delBolao('${b.id}','${b.nome.replace(/'/g,"\\'")}')">🗑️</button>`:''}
@@ -742,6 +747,34 @@ const R = {
     $('view-boloes').innerHTML=h;
   },
   _bClick(id){S.bolao=id; R.ir('bolao');},
+  // Popup pro admin/dev avisando de bolões premiados na conferência automática (visto = localStorage por navegador)
+  _verificarPremios() {
+    if (!AUTH.isAdmin()) return;
+    let vistos;
+    try { vistos = new Set(JSON.parse(localStorage.getItem('premiosVistos')||'[]')); } catch { vistos = new Set(); }
+    const novos = (S.cache.boloes||[]).filter(b => b.status==='conferido' && b.resultado?.premiado && !vistos.has(b.id));
+    if (!novos.length) return;
+    MODAL.open(`
+      <div class="m-title">🎉 Bolão${novos.length>1?'ões':''} premiado${novos.length>1?'s':''}!</div>
+      ${novos.map(b=>{
+        const lt=LOTERIAS[b.loteria];
+        return `<div class="card mb12" style="border-left:4px solid var(--gold)">
+          <div style="font-weight:700">${lt?.emoji||''} ${b.nome}</div>
+          <div class="txs muted">${lt?.nome||b.loteria} · Concurso #${b.concurso}</div>
+          <div class="mt8">Prêmio total: <strong>${fmt$(b.resultado.premioTotal)}</strong></div>
+          <div class="txs muted">${fmt$(b.resultado.rateioPorCota)} por cota</div>
+        </div>`;
+      }).join('')}
+      <button class="btn btn-p btn-f mt8" onclick='R._fecharPremios(${JSON.stringify(novos.map(b=>b.id))})'>Fechar</button>
+    `);
+  },
+  _fecharPremios(ids) {
+    let vistos;
+    try { vistos = new Set(JSON.parse(localStorage.getItem('premiosVistos')||'[]')); } catch { vistos = new Set(); }
+    ids.forEach(id=>vistos.add(id));
+    localStorage.setItem('premiosVistos', JSON.stringify([...vistos].slice(-500)));
+    MODAL.close();
+  },
   _delBolao(id, nome) {
     if(!confirm(`Excluir o bolão "${nome}"?\n\nTodos os membros e pagamentos vinculados também serão removidos. Esta ação não pode ser desfeita.`)) return;
     DB.boloes.del(id); R._boloes();
@@ -753,6 +786,8 @@ const R = {
     if(!b){R.ir('boloes');return;}
     const lt=LOTERIAS[b.loteria];
     $('h-title').textContent=b.nome;
+    const res = b.resultado;
+    const acertadas = res ? new Set(b.numeros.flat().filter(n=>res.dezenas.includes(n))) : new Set();
     $('view-bolao').innerHTML=`
       <div class="card mb12">
         <div class="fxb">
@@ -761,8 +796,17 @@ const R = {
         </div>
         <div class="divider"></div>
         <div class="sectt">Jogos do bolão</div>
-        ${b.numeros.map((ns,i)=>`<div class="mb8"><div class="txs muted mb8">Jogo ${i+1}</div><div class="bolas">${ns.map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}</div></div>`).join('')}
+        ${b.numeros.map((ns,i)=>`<div class="mb8"><div class="txs muted mb8">Jogo ${i+1}${res?` · ${res.jogos[i]?.acertos??0} acerto${(res.jogos[i]?.acertos??0)!==1?'s':''}`:''}</div><div class="bolas">${ns.map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}</div></div>`).join('')}
       </div>
+      ${res?`
+      <div class="card mb12" style="border:2px solid ${res.premiado?'var(--gold)':'var(--border)'}">
+        <div class="sectt mb8">🎯 Resultado — Concurso #${b.concurso}</div>
+        <div class="bolas">${res.dezenas.map(n=>`<span class="bola${acertadas.has(n)?' bola-hit':''}" style="${acertadas.has(n)?'':`background:${lt.cor}`}">${n}</span>`).join('')}</div>
+        <div class="txs muted mt8 mb8">Sorteio em ${res.dataApuracao||'—'} · Maior acerto: ${res.maiorAcerto}</div>
+        ${res.premiado
+          ? `<div class="ia-aviso" style="border-color:var(--gold);color:var(--gold)">🎉 <strong>Premiado!</strong> Prêmio total ${fmt$(res.premioTotal)} — ${fmt$(res.rateioPorCota)} por cota.</div>`
+          : `<div class="txs muted">Não foi dessa vez — próximo bolão já disponível!</div>`}
+      </div>`:''}
       <div class="tabs">
         <button class="tab on" onclick="R._tab('resultados',this)">📋 Resultados</button>
         <button class="tab" onclick="R._tab('ia',this)">🤖 IA</button>

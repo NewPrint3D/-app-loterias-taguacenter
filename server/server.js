@@ -52,19 +52,20 @@ app.post('/api/auth/login', async (req, res) => {
   res.json({ ok: true, role: login, nome: _loginNomes[login] });
 });
 
+// Headers de navegador — a Caixa bloqueia (403) requisições sem eles vindas de servidor
+const CAIXA_HEADERS = {
+  'Accept': 'application/json, text/plain, */*',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Referer': 'https://loterias.caixa.gov.br/Paginas/Mega-Sena.aspx',
+  'Origin': 'https://loterias.caixa.gov.br',
+};
+
 // ---- PROXY CAIXA (evita CORS no frontend) ----
 app.get('/api/caixa/:loteria/:concurso?', async (req, res) => {
   const { loteria, concurso } = req.params;
   const url = `https://servicebus2.caixa.gov.br/portaldeloterias/api/${loteria}/${concurso || ''}`;
   try {
-    const r = await fetch(url, {
-      headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'Referer': 'https://loterias.caixa.gov.br/Paginas/Mega-Sena.aspx',
-        'Origin': 'https://loterias.caixa.gov.br',
-      }
-    });
+    const r = await fetch(url, { headers: CAIXA_HEADERS });
     if (!r.ok) { res.status(r.status).json({ error: 'Caixa retornou ' + r.status }); return; }
     const data = await r.json();
     res.json(data);
@@ -108,6 +109,7 @@ app.get('/api/boloes', async (req, res) => {
     const rows = boloes.rows.map(b => ({
       ...b,
       numeros: typeof b.numeros === 'string' ? JSON.parse(b.numeros || '[]') : (b.numeros || []),
+      resultado: typeof b.resultado === 'string' ? JSON.parse(b.resultado) : (b.resultado || null),
       membros: membros.rows
         .filter(m => m.bolao_id === b.id)
         .map(m => ({ nome: m.nome, fone: m.fone, cotas: m.cotas, pago: m.pago, _id: m.id }))
@@ -122,7 +124,9 @@ app.post('/api/boloes', async (req, res) => {
     await pool.query(
       `INSERT INTO boloes(id,loteria,nome,grupo,cotas_total,valor_cota,concurso,status,numeros,criado)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT(id) DO UPDATE SET loteria=$2,nome=$3,grupo=$4,cotas_total=$5,valor_cota=$6,concurso=$7,status=$8,numeros=$9,criado=$10`,
+       ON CONFLICT(id) DO UPDATE SET loteria=$2,nome=$3,grupo=$4,cotas_total=$5,valor_cota=$6,concurso=$7,
+         status=CASE WHEN boloes.status='conferido' AND $8='ativo' THEN boloes.status ELSE $8 END,
+         numeros=$9,criado=$10`,
       [id, loteria, nome, grupo||'', cotas_total||10, valor_cota||0, concurso||0, status||'ativo', JSON.stringify(numeros||[]), criado||'']
     );
     if (Array.isArray(membros)) {
@@ -615,6 +619,145 @@ app.post('/api/wpp/encerrar-cadastro', async (req, res) => {
     }
     res.json({ ok: true, encerrados: rows.length });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================
+// CONFERÊNCIA AUTOMÁTICA DE RESULTADOS
+// =============================================
+const cron = require('node-cron');
+
+pool.query(`ALTER TABLE boloes ADD COLUMN IF NOT EXISTS resultado JSONB`).catch(() => {});
+
+const NOMES_LOTERIA = {
+  megasena: 'Mega-Sena', quina: 'Quina', lotofacil: 'Lotofácil', lotomania: 'Lotomania',
+  timemania: 'Timemania', duplasena: 'Dupla Sena', diadesorte: 'Dia de Sorte',
+};
+
+const CAIXA_TIMEOUT_MS = 10000;
+
+// Busca direto da Caixa (com headers de navegador); cai pros proxies se a Caixa bloquear (403)
+async function buscarResultadoCaixa(loteria, concurso) {
+  const url = `https://servicebus2.caixa.gov.br/portaldeloterias/api/${loteria}/${concurso}`;
+  try {
+    const r = await fetch(url, { headers: CAIXA_HEADERS, signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS) });
+    if (r.ok) return await r.json();
+  } catch {}
+  const proxies = [
+    `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+  ];
+  for (const p of proxies) {
+    try {
+      const r = await fetch(p, { signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      const data = j.contents ? JSON.parse(j.contents) : j;
+      if (data && data.numero) return data;
+    } catch {}
+  }
+  return null;
+}
+
+// Confere cada jogo do bolão contra as dezenas sorteadas e calcula prêmio pela faixa real da Caixa
+function conferirJogos(numeros, dezenasSorteadas, faixas) {
+  const set = new Set(dezenasSorteadas);
+  const jogos = numeros.map(jogo => {
+    const acertos = jogo.filter(n => set.has(n)).length;
+    const faixa = faixas.find(f => f.acertos === acertos);
+    const premio = faixa && faixa.valorPremio > 0 ? faixa.valorPremio : 0;
+    return { numeros: jogo, acertos, premio };
+  });
+  const maiorAcerto = jogos.reduce((m, j) => Math.max(m, j.acertos), 0);
+  const premioTotal = jogos.reduce((s, j) => s + j.premio, 0);
+  return { jogos, maiorAcerto, premioTotal, premiado: premioTotal > 0 };
+}
+
+async function enviarResultadoWhatsApp(b, resultado) {
+  if (!botSock || botStatus !== 'conectado') return;
+  try {
+    const g = await pool.query('SELECT jid FROM grupos WHERE nome=$1', [b.grupo]);
+    const jid = g.rows[0]?.jid;
+    if (!jid) return;
+    const nomeLt = NOMES_LOTERIA[b.loteria] || b.loteria;
+    const fmtMoeda = v => v.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    const msg = resultado.premiado
+      ? `🎉 PREMIADO! Bolão ${b.nome} acertou ${resultado.maiorAcerto} pontos na ${nomeLt}! Prêmio total: R$ ${fmtMoeda(resultado.premioTotal)} — R$ ${fmtMoeda(resultado.rateioPorCota)} por cota. Procure a lotérica!`
+      : `📊 Resultado ${nomeLt} concurso ${b.concurso}: ${resultado.dezenas.join(' - ')}. Nosso bolão fez ${resultado.maiorAcerto} acertos. Não foi dessa vez — próximo bolão já disponível! 🍀`;
+    await botSock.sendMessage(jid, { text: msg });
+  } catch (e) {
+    console.error('Conferência: falha ao enviar mensagem —', e.message);
+  }
+}
+
+async function conferirUmBolao(b) {
+  try {
+    const dados = await buscarResultadoCaixa(b.loteria, b.concurso);
+    // dados.numero !== concurso: a Caixa às vezes devolve o último concurso conhecido
+    // em vez de erro quando o concurso pedido ainda não foi apurado
+    if (!dados || !dados.listaDezenas || dados.numero !== b.concurso) {
+      console.log(`Conferência: concurso ${b.concurso} de ${b.loteria} ainda não apurado — tenta na próxima execução.`);
+      return;
+    }
+    // Sem faixas de rateio a apuração está incompleta — não dá pra saber se premiou. Tenta de novo depois.
+    if (!Array.isArray(dados.listaRateioPremio) || !dados.listaRateioPremio.length) {
+      console.log(`Conferência: concurso ${b.concurso} de ${b.loteria} sem rateio de prêmios ainda — tenta na próxima execução.`);
+      return;
+    }
+    const faixas = dados.listaRateioPremio.map(f => {
+      const m = String(f.descricaoFaixa || '').match(/\d+/);
+      return { acertos: m ? parseInt(m[0], 10) : null, valorPremio: f.valorPremio || 0 };
+    });
+    const numeros = typeof b.numeros === 'string' ? JSON.parse(b.numeros || '[]') : (b.numeros || []);
+    const { jogos, maiorAcerto, premioTotal, premiado } = conferirJogos(numeros, dados.listaDezenas, faixas);
+    const resultado = {
+      dezenas: dados.listaDezenas,
+      dataApuracao: dados.dataApuracao || null,
+      jogos, maiorAcerto, premioTotal, premiado,
+      rateioPorCota: premiado ? Math.round((premioTotal / (b.cotas_total || 1)) * 100) / 100 : 0,
+      conferidoEm: new Date().toISOString(),
+    };
+
+    // status só muda de 'ativo' pra 'conferido' se ainda estiver 'ativo' — evita processar
+    // duas vezes o mesmo bolão caso duas execuções (cron + gatilho manual) se sobreponham
+    const upd = await pool.query(
+      `UPDATE boloes SET resultado=$1, status='conferido' WHERE id=$2 AND status='ativo'`,
+      [JSON.stringify(resultado), b.id]
+    );
+    if (!upd.rowCount) return; // outra execução já conferiu este bolão nesse meio-tempo
+    console.log(`Conferência: bolão "${b.nome}" conferido — ${maiorAcerto} acertos, premiado=${premiado}`);
+    await enviarResultadoWhatsApp(b, resultado);
+  } catch (e) {
+    console.error(`Conferência: erro no bolão ${b.id} —`, e.message);
+  }
+}
+
+let _conferenciaRodando = false;
+async function conferirBoloes() {
+  if (_conferenciaRodando) {
+    console.log('Conferência: já em andamento, ignorando chamada concorrente.');
+    return;
+  }
+  _conferenciaRodando = true;
+  console.log('Conferência: iniciando verificação de resultados...');
+  try {
+    const boloes = (await pool.query(`SELECT * FROM boloes WHERE status = 'ativo'`)).rows;
+    await Promise.allSettled(boloes.map(conferirUmBolao));
+  } catch (e) {
+    console.error('Conferência: erro ao buscar bolões —', e.message);
+  } finally {
+    _conferenciaRodando = false;
+    console.log('Conferência: finalizada.');
+  }
+}
+
+// Todo dia às 21h e 22h (horário de Brasília)
+cron.schedule('0 21 * * *', conferirBoloes, { timezone: 'America/Sao_Paulo' });
+cron.schedule('0 22 * * *', conferirBoloes, { timezone: 'America/Sao_Paulo' });
+
+// Gatilho manual — força a conferência sem esperar o cron (retry manual, testes)
+app.post('/api/boloes/conferir', async (req, res) => {
+  try { await conferirBoloes(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));

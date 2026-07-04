@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS boloes (
   concurso    INTEGER DEFAULT 0,
   status      TEXT DEFAULT 'ativo',
   numeros     JSONB DEFAULT '[]',
-  criado      TEXT DEFAULT ''
+  criado      TEXT DEFAULT '',
+  resultado   JSONB
 );
 
 CREATE TABLE IF NOT EXISTS membros (

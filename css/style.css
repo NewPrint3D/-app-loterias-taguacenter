@@ -218,8 +218,9 @@ body {
   font-size: .77rem; font-weight: 800; color: #fff;
   box-shadow: 0 2px 6px rgba(0,0,0,.35); flex-shrink: 0;
 }
-.bola-q { background: linear-gradient(135deg,#ef4444,#b91c1c) !important; }
-.bola-f { background: linear-gradient(135deg,#3b82f6,#1d4ed8) !important; }
+.bola-q   { background: linear-gradient(135deg,#ef4444,#b91c1c) !important; }
+.bola-f   { background: linear-gradient(135deg,#3b82f6,#1d4ed8) !important; }
+.bola-hit { background: linear-gradient(135deg,#22c55e,#15803d) !important; box-shadow: 0 2px 8px rgba(34,197,94,.5); }
 
 /* ---- RESULTADO CARD ---- */
 .res-card { background: var(--bg3); border-radius: var(--rsm); padding: 12px; margin-bottom: 10px; }
