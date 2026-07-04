@@ -49,16 +49,6 @@ body {
 }
 #splash.hide { opacity: 0; pointer-events: none; }
 .sp-inner { text-align: center; }
-.ze-big {
-  width: 90px; height: 90px;
-  background: radial-gradient(circle at 32% 28%, #ffffff, #cbd5e1);
-  border-radius: 50%; margin: 0 auto 20px;
-  box-shadow: 0 0 40px rgba(255,255,255,.35);
-  animation: ze-b .85s ease-in-out infinite alternate;
-  position: relative; display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-}
-.ze-big::before { content:'13'; font-size:30px; font-weight:900; color:#1e293b; letter-spacing:-1px; }
 .sp-logo    { width: 120px; height: 120px; border-radius: 50%; object-fit: cover;
               margin: 0 auto 8px; display: block;
               box-shadow: 0 0 28px rgba(255,255,255,.2); }
@@ -66,7 +56,6 @@ body {
 .sp-bar { width:160px; height:4px; background:var(--bg3); border-radius:99px; overflow:hidden; margin:0 auto; }
 .sp-fill { height:100%; background:var(--primary); border-radius:99px; animation: bar-f 1.8s ease-out forwards; }
 @keyframes bar-f { from{width:0} to{width:100%} }
-@keyframes ze-b  { from{transform:translateY(0)} to{transform:translateY(-14px)} }
 
 /* ---- LOGIN ---- */
 .login-box {
