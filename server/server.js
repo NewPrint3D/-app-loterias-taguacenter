@@ -659,11 +659,19 @@ app.get('/api/wpp/participantes/:jid', async (req, res) => {
   try {
     const jid = decodeURIComponent(req.params.jid);
     const meta = await botSock.groupMetadata(jid);
-    const participantes = meta.participants.map(p => ({
-      jid: p.id,
-      fone: p.id.replace('@s.whatsapp.net', '').replace(/\D/g, ''),
-      admin: !!(p.admin),
-    }));
+    const participantes = meta.participants.map(p => {
+      // Participantes com privacidade ativada aparecem como "@lid" (Linked ID) em vez de
+      // "@s.whatsapp.net" — o WhatsApp não entrega o telefone real nesse caso pra nenhum
+      // bot/app de terceiros. Sem essa checagem, os dígitos do LID eram extraídos e exibidos
+      // como se fossem um telefone válido (número absurdo, sem sentido).
+      const oculto = p.id.endsWith('@lid');
+      return {
+        jid: p.id,
+        fone: oculto ? '' : p.id.replace('@s.whatsapp.net', '').replace(/\D/g, ''),
+        foneOculto: oculto,
+        admin: !!(p.admin),
+      };
+    });
     res.json({ ok: true, nome: meta.subject, participantes });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

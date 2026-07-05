@@ -1319,9 +1319,11 @@ const R = {
         return;
       }
       const parts = d.participantes;
+      const qtdOcultos = parts.filter(p=>p.foneOculto).length;
       MODAL.open(`
         <div class="m-title">📱 ${d.nome} — ${parts.length} participantes</div>
         <p class="muted txs mb12">Preencha o nome de cada participante e selecione quem importar:</p>
+        ${qtdOcultos ? `<div class="ia-aviso mb12">🔒 ${qtdOcultos} participante${qtdOcultos!==1?'s tiveram':' teve'} o número escondido pelo WhatsApp (configuração de privacidade da pessoa) — nenhum app/bot recebe esse telefone nesse caso. Ainda dá pra importar só o nome.</div>` : ''}
         <div style="max-height:50vh;overflow-y:auto">
           ${parts.map((p,i)=>`
             <div class="fr mb8" style="align-items:center;gap:8px">
@@ -1329,7 +1331,9 @@ const R = {
               <div style="flex:1">
                 <input type="text" id="pn-${i}" placeholder="Nome do apostador"
                        style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
-                <div class="txs muted">📱 +${p.fone}</div>
+                ${p.foneOculto
+                  ? `<div class="txs" style="color:var(--gold)">🔒 Número oculto pelo WhatsApp</div>`
+                  : `<div class="txs muted">📱 +${p.fone}</div>`}
               </div>
             </div>`).join('')}
         </div>
