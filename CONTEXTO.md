@@ -95,10 +95,12 @@ server/schema.sql   — schema das tabelas Neon (referência)
 > O módulo `SEED` (dados demo fictícios) foi **removido** em 05/07/2026 — banco de produção fica
 > vazio até ter dados reais, sem repovoamento automático.
 
-## Banco de dados — Neon PostgreSQL (9 tabelas)
+## Banco de dados — Neon PostgreSQL (10 tabelas)
 
 ```
-grupos        — id, nome, link, membros, ativo, jid (JID WhatsApp para o bot)
+grupos        — id, nome, link, membros (nº estimado digitado no cadastro), ativo, jid (JID WhatsApp para o bot)
+grupo_membros — id, grupo_id (FK→grupos, ON DELETE CASCADE), nome, fone, criado
+                (cadastro PERMANENTE de apostadores do grupo, independente de bolão — ver seção própria)
 boloes        — id, loteria, nome, grupo (texto histórico), grupo_id (FK→grupos, ON DELETE SET NULL),
                 cotas_total, valor_cota, concurso, status, numeros (JSONB), criado,
                 resultado (JSONB — dezenas, jogos, maiorAcerto, premioTotal, premiado, rateioPorCota, fonte, conferidoEm)
@@ -159,9 +161,10 @@ Curto (curto=true):   "R$ 7M", "R$ 2,8Bi" (usado em contextos compactos)
 - **Importação de participantes**: por grupo (botão "📱 Importar", via Baileys) ou por colagem de
   texto copiado do WhatsApp (botão "📋 Importar membros", não depende do bot).
   - Participantes com privacidade ativada aparecem com JID `@lid` — o WhatsApp **não entrega o
-    telefone real** nesse caso pra nenhum app de terceiros. O app mostra "🔒 Número oculto" e
-    deixa o campo de telefone **editável** nos modais de importação (05/07/2026) pra o admin
-    preencher manualmente quando descobrir o número por outro meio.
+    telefone real** nesse caso pra nenhum app de terceiros. O campo de telefone fica **editável**
+    nos modais de importação pra o admin preencher manualmente quando descobrir o número por outro
+    meio. (Os avisos de texto "número oculto pelo WhatsApp" foram removidos da UI em 05/07/2026 a
+    pedido do usuário — o comportamento do campo continua igual, só o aviso saiu.)
 
 ## Conferência Automática de Resultados (04/07/2026)
 
@@ -187,6 +190,25 @@ quem aceitou, quem pagou e quem está com comprovante pendente de aprovação.
   grupo mostra os bolões + participantes consolidados.
 - A navegação antiga por loteria continua acessível clicando no card da loteria na Home.
 
+## Cadastro de Apostadores do Grupo — independente de bolão (05/07/2026)
+
+Grupo é uma lista permanente de possíveis apostadores; bolão é uma oferta pontual que o lotérico
+faz a um ou mais grupos, e nem todo mundo aceita comprar. Por isso "quem está no grupo" não pode
+depender de existir algum bolão ativo — tabela nova `grupo_membros` guarda esse cadastro
+permanente (nome + telefone), independente de bolão.
+
+- Tela de grupo ganhou seção **"Apostadores do grupo"** (sempre visível, mesmo sem bolão nenhum):
+  adicionar manual, colar lista (mesmo parser da importação de membros de bolão), editar, remover.
+- **Integrado** com: contagem "Apostadores" do dashboard Admin, badge "Só grupo" na tela
+  Apostadores, WhatsApp → Participantes (dá pra mandar cota/aviso individual mesmo sem bolão),
+  contador do card de grupo na tela WhatsApp.
+- Grupo sem nenhum cadastro individual ainda soma automaticamente o "Nº de membros" digitado no
+  cadastro do grupo (estimativa) — some sozinha assim que alguém cadastrar os nomes de verdade.
+- Card **"Grupos"** novo no dashboard Admin (total de grupos cadastrados).
+- **Pendência conhecida:** o grupo real "Bolões da Lotérica" tem todos os participantes com
+  privacidade ativada no WhatsApp (JID `@lid`) — o bot não consegue puxar telefone nenhum
+  automaticamente ali. Buscando uma solução melhor pro cadastro automático.
+
 ## Funcionalidades implementadas
 
 - Splash screen + login (bcrypt + JWT); cliente entra só com nome + grupo (sem token)
@@ -199,8 +221,9 @@ quem aceitou, quem pagou e quem está com comprovante pendente de aprovação.
 - Gerador de jogos (IA) — 40% quentes + 20% frios + aleatório
 - Conferência automática de resultados + aviso instantâneo ao admin + aviso ao grupo 5min depois
 - Resultados gerais de todas as loterias
-- Admin dashboard — total vendido, bolões, apostadores, ticket médio
-- Apostadores — visão unificada app + bolões, dar acesso, registrar todos, telefone editável
+- Admin dashboard — total vendido, bolões, grupos, apostadores (real + estimativa), ticket médio
+- Cadastro de apostadores do grupo — independente de bolão, adicionar manual ou colar lista
+- Apostadores — visão unificada app + bolões + grupo, dar acesso, registrar todos, telefone editável
 - WhatsApp Manager + Cadastro Automático + Bot Baileys
 - Cartela do bolão — drag-and-drop (imagem/vídeo/PDF)
 - Estatísticas — filtros 7d/15d/30d/Tudo/Personalizado, Chart.js
@@ -214,8 +237,9 @@ quem aceitou, quem pagou e quem está com comprovante pendente de aprovação.
 - `C:\Users\User\Downloads\comprovante para teste app loterias.jpeg`
 - `C:\Users\User\Downloads\comprovante para teste app loterias (1).jpeg`
 
-> Banco de produção está **zerado** desde 05/07/2026 (0 grupos, 0 bolões, 0 usuários, 0 vendas) —
-> pronto pra dados reais do cliente. Sem SEED, não repovoa sozinho.
+> Banco de produção foi zerado em 05/07/2026 (sem SEED, não repovoa sozinho) e já tem dados reais
+> entrando: 3 grupos (2 de teste do próprio usuário + "Bolões da Lotérica", real) e ~40 apostadores
+> cadastrados no grupo real (11 com nome, 29 só com telefone, ainda sem bolão nenhum criado).
 
 ## Deploy — App Online
 
