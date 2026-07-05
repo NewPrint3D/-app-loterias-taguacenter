@@ -324,7 +324,6 @@ const AUTH = {
     $('nav-admin').hidden = !isAdmin;
 
     DB.ctrl.log('Login: ' + (S.user.nome||S.user.login));
-    SEED.init();
     ZE.start();
     R.ir('home');
     R._verificarPremios();
@@ -371,59 +370,6 @@ const AUTH = {
   },
 
   isAdmin: () => ['admin','dev'].includes(S.user?.role),
-};
-
-// =============================================
-// SEED (dados demo)
-// =============================================
-const SEED = {
-  init() {
-    // Não rodar SEED se o banco já tem qualquer dado (produção)
-    if (S.cache.boloes.length || S.cache.usuarios.length || S.cache.grupos.length) return;
-    // Usuários demo
-    if (!DB.usuarios.list().length) {
-      [
-        { id:uid(), nome:'João Silva',   ativo:true,  criado:hoje() },
-        { id:uid(), nome:'Maria Santos', ativo:true,  criado:hoje() },
-        { id:uid(), nome:'Pedro Lima',   ativo:true,  criado:hoje() },
-        { id:uid(), nome:'Ana Costa',    ativo:false, criado:hoje() },
-      ].forEach(u => DB.usuarios.save(u));
-    }
-
-    if (DB.boloes.list().length > 0) return;
-    const bids = [uid(),uid(),uid()];
-    const bs = [
-      { id:bids[0], loteria:'megasena', nome:'Bolão do Escritório', grupo:'Grupo Firma Alpha',
-        cotas_total:10, valor_cota:30, concurso:2780, status:'ativo',
-        membros:[{nome:'João Silva',fone:'61999991111',cotas:2,pago:true},{nome:'Maria Santos',fone:'61988882222',cotas:1,pago:true},{nome:'Pedro Lima',fone:'61977773333',cotas:2,pago:false},{nome:'Ana Costa',fone:'61966664444',cotas:1,pago:true}],
-        numeros:[['04','11','23','38','51','59'],['07','14','22','33','47','55']], criado:hoje() },
-      { id:bids[1], loteria:'quina', nome:'Bolão Família', grupo:'Família Silva',
-        cotas_total:8, valor_cota:20, concurso:6328, status:'ativo',
-        membros:[{nome:'Roberto Silva',fone:'61955555555',cotas:3,pago:true},{nome:'Carla Menezes',fone:'61944446666',cotas:2,pago:false},{nome:'Tiago Rocha',fone:'61933337777',cotas:3,pago:true}],
-        numeros:[['08','17','32','55','78']], criado:hoje() },
-      { id:bids[2], loteria:'lotofacil', nome:'Bolão dos Amigos', grupo:'Turma da Churrasqueira',
-        cotas_total:12, valor_cota:15, concurso:3218, status:'ativo',
-        membros:[{nome:'Lucas Pereira',fone:'61922228888',cotas:2,pago:true},{nome:'Fernanda Dias',fone:'61911119999',cotas:1,pago:true},{nome:'Marcelo Faria',fone:'61900000000',cotas:3,pago:true}],
-        numeros:[['01','02','05','07','09','11','14','16','18','19','20','22','23','24','25']], criado:hoje() },
-    ];
-    const gs = [
-      {id:uid(),nome:'Grupo Firma Alpha',link:'https://chat.whatsapp.com/exemplo1',membros:45,ativo:true},
-      {id:uid(),nome:'Família Silva',link:'https://chat.whatsapp.com/exemplo2',membros:22,ativo:true},
-      {id:uid(),nome:'Turma da Churrasqueira',link:'https://chat.whatsapp.com/exemplo3',membros:18,ativo:true},
-    ];
-    bs.forEach(b=>DB.boloes.save(b));
-    gs.forEach(g=>DB.grupos.save(g));
-    const lts=['megasena','quina','lotofacil'];
-    const nms=['João Silva','Maria Santos','Pedro Lima','Ana Costa','Roberto Silva','Carla Menezes','Tiago Rocha','Lucas Pereira'];
-    for(let i=0;i<50;i++){
-      const d=new Date(); d.setDate(d.getDate()-Math.floor(Math.random()*30));
-      const lt=lts[Math.floor(Math.random()*3)];
-      const cotas=Math.floor(Math.random()*3)+1;
-      const vBase=lt==='megasena'?30:lt==='quina'?20:15;
-      DB.vendas.save({id:uid(),bolao_id:bids[Math.floor(Math.random()*3)],loteria:lt,
-        membro:nms[Math.floor(Math.random()*8)],cotas,valor:cotas*vBase,data:d.toLocaleDateString('pt-BR')});
-    }
-  },
 };
 
 // =============================================
