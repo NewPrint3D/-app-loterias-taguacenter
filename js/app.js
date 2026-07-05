@@ -583,7 +583,6 @@ const R = {
             <span class="lt-emoji">${lt.emoji}</span>
             <div id="ld-${lt.id}" class="lt-dados-live"><div class="lt-loading-dot"></div></div>
             <div class="lt-nome">${lt.nome}</div>
-            <div class="lt-dias">${lt.dias}</div>
           </div>`;
         }).join('')}
       </div>`;
@@ -645,7 +644,6 @@ const R = {
             <span class="lt-emoji">${lt.emoji}</span>
             <div id="ld-${lt.id}" class="lt-dados-live"><div class="lt-loading-dot"></div></div>
             <div class="lt-nome">${lt.nome}</div>
-            <div class="lt-dias">${lt.dias}</div>
           </div>`).join('')}
       </div>
 
@@ -881,7 +879,7 @@ const R = {
     const bs=DB.boloes.byLt(lt.id), admin=AUTH.isAdmin();
     let h=`<div class="bl-header">
       <div class="bl-icon" style="background:${lt.cor}25;color:${lt.cor}">${lt.emoji}</div>
-      <div><div style="font-weight:700">${lt.nome}</div><div class="muted txs">${lt.dias} · R$ ${lt.preco.toFixed(2)}/jogo</div></div>
+      <div><div style="font-weight:700">${lt.nome}</div><div class="muted txs">R$ ${lt.preco.toFixed(2)}/jogo</div></div>
       ${admin?`<button class="btn btn-p btn-sm" style="margin-left:auto" onclick="R._mNovoBolao()">+ Novo</button>`:''}
     </div>`;
     if(!bs.length){h+=`<div class="empty"><div class="ei">${lt.emoji}</div><p>Nenhum bolão cadastrado.</p></div>`;}
