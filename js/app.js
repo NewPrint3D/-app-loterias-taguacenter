@@ -1484,11 +1484,9 @@ const R = {
         return;
       }
       const parts = d.participantes;
-      const qtdOcultos = parts.filter(p=>p.foneOculto).length;
       MODAL.open(`
         <div class="m-title">📱 ${d.nome} — ${parts.length} participantes</div>
         <p class="muted txs mb12">Preencha o nome de cada participante e selecione quem importar:</p>
-        ${qtdOcultos ? `<div class="ia-aviso mb12">🔒 ${qtdOcultos} participante${qtdOcultos!==1?'s tiveram':' teve'} o número escondido pelo WhatsApp (configuração de privacidade da pessoa) — nenhum app/bot recebe esse telefone nesse caso. Ainda dá pra importar só o nome.</div>` : ''}
         <div style="max-height:50vh;overflow-y:auto">
           ${parts.map((p,i)=>`
             <div class="fr mb8" style="align-items:center;gap:8px">
@@ -1496,7 +1494,6 @@ const R = {
               <div style="flex:1">
                 <input type="text" id="pn-${i}" placeholder="Nome do apostador"
                        style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text);margin-bottom:4px">
-                ${p.foneOculto?`<div class="txs" style="color:var(--gold);margin-bottom:4px">🔒 Número oculto pelo WhatsApp — preencha manualmente se souber</div>`:''}
                 <input type="tel" id="pf-${i}" value="${p.foneOculto?'':p.fone}" placeholder="Telefone (opcional)"
                        style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
               </div>
@@ -2512,11 +2509,9 @@ const WPP = {
       return;
     }
 
-    const qtdOcultos = WPP._pendingImport.filter(p=>p.foneOculto).length;
     MODAL.open(`
       <div class="m-title">📱 Participantes (${WPP._pendingImport.length})</div>
       <p class="muted txs mb12">Preencha o nome de cada participante. Deixe em branco para pular.</p>
-      ${qtdOcultos ? `<div class="ia-aviso mb12">🔒 ${qtdOcultos} participante${qtdOcultos!==1?'s tiveram':' teve'} o número escondido pelo WhatsApp (configuração de privacidade da pessoa) — nenhum app/bot recebe esse telefone nesse caso. Ainda dá pra importar só o nome, ou preencher o telefone manualmente.</div>` : ''}
       <div style="max-height:55vh;overflow-y:auto">
         ${WPP._pendingImport.map((p,i)=>`
           <div class="fr mb8" style="align-items:center;gap:8px">
@@ -2524,7 +2519,6 @@ const WPP = {
             <div style="flex:1">
               <input type="text" id="wpn-${i}" placeholder="Nome do participante"
                      style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text);margin-bottom:4px">
-              ${p.foneOculto?`<div class="txs" style="color:var(--gold);margin-bottom:4px">🔒 Número oculto pelo WhatsApp — preencha manualmente se souber</div>`:''}
               <input type="tel" id="wpf-${i}" value="${p.foneOculto?'':p.fone}" placeholder="Telefone (opcional)"
                      style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
             </div>
