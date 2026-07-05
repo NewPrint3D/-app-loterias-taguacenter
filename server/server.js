@@ -297,6 +297,13 @@ app.post('/api/vendas', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.delete('/api/vendas/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM vendas WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- PAGAMENTOS ----
 app.get('/api/pagamentos', async (req, res) => {
   try {
