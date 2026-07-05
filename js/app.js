@@ -1094,8 +1094,12 @@ const R = {
   },
   _saveRosterManual() {
     const nome=$('rmn')?.value?.trim(); if(!nome){alert('Informe o nome.');return;}
-    const id=$('rmid')?.value||uid();
-    DB.grupoMembros.save({id, grupo_id:$('rmg').value, nome, fone:normalizarFone($('rmf')?.value||''), criado:hoje()});
+    const idPrevio=$('rmid')?.value;
+    const existente=idPrevio && (S.cache.grupoMembros||[]).find(x=>x.id===idPrevio);
+    DB.grupoMembros.save({
+      id: idPrevio||uid(), grupo_id:$('rmg').value, nome, fone:normalizarFone($('rmf')?.value||''),
+      criado: existente ? existente.criado : hoje(), // preserva a data original ao editar
+    });
     MODAL.close(); R._grupoDet();
   },
   _delRoster(id) {
