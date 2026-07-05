@@ -217,6 +217,7 @@ const DB = {
   // uma oferta pontual, o grupo é a lista permanente de quem pode aceitar comprar cota).
   grupoMembros: {
     list:    grupoId => (S.cache.grupoMembros||[]).filter(m=>m.grupo_id===grupoId),
+    listAll: ()       => S.cache.grupoMembros || [],
     save:    m        => { const l=S.cache.grupoMembros; const i=l.findIndex(x=>x.id===m.id); i>=0?l[i]=m:l.push(m); _api.post('/api/grupo_membros',m); },
     del:     id        => { S.cache.grupoMembros=S.cache.grupoMembros.filter(m=>m.id!==id); _api.del('/api/grupo_membros/'+id); },
   },
@@ -1304,9 +1305,19 @@ const R = {
     const tot=vs.reduce((s,v)=>s+(v.valor||0),0);
     const tm=vs.length?tot/vs.length:0;
     // Apostadores = membros únicos dos bolões ATUAIS (não o histórico de vendas, que pode ter
-    // nomes de bolões já apagados e ficar "descolado" do que existe hoje de verdade).
+    // nomes de bolões já apagados e ficar "descolado" do que existe hoje de verdade) + cadastro
+    // de apostadores dos grupos (gente que ainda não comprou cota nenhuma, mas já está na lista
+    // permanente do grupo — ver "Apostadores do grupo").
     const apostadoresUnicos=new Set();
     bs.forEach(b=>(b.membros||[]).forEach(m=>apostadoresUnicos.add(m.nome.trim().toLowerCase())));
+    // "Sem nome" é um placeholder, não um nome real — usar como chave de dedup colapsaria todo
+    // mundo sem nome identificado num "apostador" só. Quem tem telefone usa o telefone como chave
+    // (identificador de verdade); sem telefone e sem nome real, usa o id (nunca colide).
+    DB.grupoMembros.listAll().forEach(m=>{
+      const temNomeReal = m.nome && m.nome.trim().toLowerCase()!=='sem nome';
+      const chave = temNomeReal ? m.nome.trim().toLowerCase() : (m.fone ? 'fone:'+m.fone : 'gm:'+m.id);
+      apostadoresUnicos.add(chave);
+    });
     const aps=apostadoresUnicos.size;
     const isdev=S.user.role==='dev';
     const qtUsr=DB.usuarios.list().length;
@@ -1338,17 +1349,32 @@ const R = {
     S.cache.boloes.forEach(b => {
       (b.membros||[]).forEach(m => {
         const k = m.nome.trim().toLowerCase();
-        if (!mapa[k]) mapa[k] = { nome: m.nome, fone: m.fone||'', grupos: [], noApp: false };
+        if (!mapa[k]) mapa[k] = { nome: m.nome, fone: m.fone||'', grupos: [], noApp: false, emBolao:false, emGrupo:false };
+        mapa[k].emBolao = true;
         if (b.grupo && !mapa[k].grupos.includes(b.grupo)) mapa[k].grupos.push(b.grupo);
         if (m.fone && !mapa[k].fone) mapa[k].fone = m.fone;
       });
+    });
+
+    // Cadastro de apostadores dos grupos — gente que já está na lista permanente do grupo mas
+    // ainda não comprou cota em nenhum bolão (ver "Apostadores do grupo" na tela de Grupos).
+    // "Sem nome" é placeholder, não identificador real — dedup usa telefone ou id nesse caso,
+    // senão todo mundo sem nome identificado colapsaria num "apostador" só.
+    DB.grupoMembros.listAll().forEach(m => {
+      const temNomeReal = m.nome && m.nome.trim().toLowerCase()!=='sem nome';
+      const k = temNomeReal ? m.nome.trim().toLowerCase() : (m.fone?'fone:'+m.fone:'gm:'+m.id);
+      const gNome = DB.grupos.list().find(g=>g.id===m.grupo_id)?.nome || '';
+      if (!mapa[k]) mapa[k] = { nome:m.nome, fone:m.fone||'', grupos:[], noApp:false, emBolao:false, emGrupo:false };
+      mapa[k].emGrupo = true;
+      if (gNome && !mapa[k].grupos.includes(gNome)) mapa[k].grupos.push(gNome);
+      if (m.fone && !mapa[k].fone) mapa[k].fone = m.fone;
     });
 
     // Marca quem já está registrado no app
     DB.usuarios.list().forEach(u => {
       const k = u.nome.trim().toLowerCase();
       if (mapa[k]) { mapa[k].noApp=true; mapa[k]._id=u.id; mapa[k].ativo=u.ativo; if(!mapa[k].fone) mapa[k].fone=u.fone||''; }
-      else mapa[k] = { nome:u.nome, fone:u.fone||'', grupos:[], noApp:true, _id:u.id, ativo:u.ativo };
+      else mapa[k] = { nome:u.nome, fone:u.fone||'', grupos:[], noApp:true, _id:u.id, ativo:u.ativo, emBolao:false, emGrupo:false };
     });
 
     const todos = Object.values(mapa).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
@@ -1360,7 +1386,7 @@ const R = {
         <button class="btn btn-p btn-sm" onclick="R._mNovoUser()">+ Adicionar</button>
       </div>
       ${soBolao.length ? `<div class="ia-aviso mb12">
-        ⚠️ <strong>${soBolao.length}</strong> apostador${soBolao.length>1?'es':''} em bolões sem acesso ao app.
+        ⚠️ <strong>${soBolao.length}</strong> apostador${soBolao.length>1?'es':''} (em bolões ou cadastrado${soBolao.length>1?'s':''} no grupo) sem acesso ao app.
         <br><button class="btn btn-p btn-sm mt8" onclick="R._registrarTodos()">✅ Registrar todos no app</button>
       </div>` : ''}
       <div class="card">
@@ -1373,7 +1399,7 @@ const R = {
               <div class="user-nome">${t.nome}
                 ${t.noApp
                   ? `<span class="badge txs" style="background:${t.ativo?'var(--primary)':'var(--red)'};color:#fff;margin-left:6px">${t.ativo?'App ✓':'Inativo'}</span>`
-                  : `<span class="badge txs" style="background:var(--border);color:var(--muted);margin-left:6px">Só bolão</span>`}
+                  : `<span class="badge txs" style="background:var(--border);color:var(--muted);margin-left:6px">${t.emBolao?'Só bolão':'Só grupo'}</span>`}
               </div>
               <div class="user-meta txs muted">
                 ${t.fone?`📱 ${t.fone}`:''}${t.grupos.length?` · ${t.grupos.join(', ')}`:''}</div>
@@ -1421,6 +1447,15 @@ const R = {
   _registrarTodos() {
     const mapa = {};
     S.cache.boloes.forEach(b => (b.membros||[]).forEach(m => { mapa[m.nome.trim().toLowerCase()] = { nome:m.nome, fone:m.fone||'' }; }));
+    // Cadastro de apostadores dos grupos entra também — exceto "Sem nome" (placeholder de quem
+    // ainda não foi identificado; não dá pra registrar no app sem um nome de verdade, e várias
+    // pessoas com o mesmo "Sem nome" colidiriam no cadastro de usuários).
+    DB.grupoMembros.listAll().forEach(m => {
+      if (!m.nome || m.nome.trim().toLowerCase()==='sem nome') return;
+      const k = m.nome.trim().toLowerCase();
+      if (!mapa[k]) mapa[k] = { nome:m.nome, fone:m.fone||'' };
+      else if (!mapa[k].fone) mapa[k].fone = m.fone||'';
+    });
     const novos = Object.values(mapa).filter(n => !DB.usuarios.find(n.nome));
     if (!novos.length) { alert('Todos já estão registrados!'); return; }
     if (!confirm(`Registrar ${novos.length} apostador${novos.length>1?'es':''} no app?`)) return;
@@ -2324,7 +2359,16 @@ const WPP = {
                  onchange="WPP._toggleGrupo('${g.id}',this.checked)">
           <div class="dest-info">
             <div class="dest-nome">${g.nome}</div>
-            <div class="dest-sub txs muted">${(()=>{const s=new Set();S.cache.boloes.filter(b=>bolaoDoGrupo(b,g)).forEach(b=>(b.membros||[]).forEach(m=>s.add(m.nome.trim().toLowerCase())));const c=s.size||g.membros;return c+' apostador'+(c!==1?'es':'');})()}</div>
+            <div class="dest-sub txs muted">${(()=>{
+              const s=new Set();
+              S.cache.boloes.filter(b=>bolaoDoGrupo(b,g)).forEach(b=>(b.membros||[]).forEach(m=>s.add(m.nome.trim().toLowerCase())));
+              DB.grupoMembros.list(g.id).forEach(m=>{
+                const temNome = m.nome && m.nome.trim().toLowerCase()!=='sem nome';
+                s.add(temNome ? m.nome.trim().toLowerCase() : 'gm:'+m.id);
+              });
+              const c=s.size||g.membros;
+              return c+' apostador'+(c!==1?'es':'');
+            })()}</div>
           </div>
         </label>`).join('')}</div>`;
 
@@ -2349,10 +2393,22 @@ const WPP = {
         if(m.pago) mapa[k].pago = true;
       });
     });
-    // Apostadores registrados no app (mesmo sem bolão)
+    // Cadastro de apostadores dos grupos — pra poder mandar cota/aviso individual mesmo pra quem
+    // ainda não comprou nada em nenhum bolão. "Sem nome" usa telefone/id como chave (mesmo motivo
+    // de sempre: colapsaria todo mundo sem nome identificado num só).
+    DB.grupoMembros.listAll().forEach(m => {
+      const temNomeReal = m.nome && m.nome.trim().toLowerCase()!=='sem nome';
+      const k = temNomeReal ? m.nome.trim().toLowerCase() : (m.fone?'fone:'+m.fone:'gm:'+m.id);
+      const gNome = DB.grupos.list().find(g=>g.id===m.grupo_id)?.nome || '';
+      if(!mapa[k]) mapa[k] = { nome:m.nome, fone:m.fone||'', grupos:[], pago:false };
+      if(gNome && !mapa[k].grupos.includes(gNome)) mapa[k].grupos.push(gNome);
+      if(m.fone && !mapa[k].fone) mapa[k].fone = m.fone;
+    });
+    // Apostadores registrados no app (mesmo sem bolão/grupo)
     DB.usuarios.list().forEach(u => {
       const k = u.nome.trim().toLowerCase();
-      if(!mapa[k]) mapa[k] = { nome:u.nome, fone:'', grupos:[], pago:false };
+      if(!mapa[k]) mapa[k] = { nome:u.nome, fone:u.fone||'', grupos:[], pago:false };
+      else if(!mapa[k].fone) mapa[k].fone = u.fone||'';
     });
     return Object.values(mapa).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
   },
