@@ -230,6 +230,33 @@ app.delete('/api/grupos/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- CADASTRO DE APOSTADORES DO GRUPO (independente de bolão) ----
+app.get('/api/grupo_membros', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM grupo_membros ORDER BY nome');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/grupo_membros', async (req, res) => {
+  const { id, grupo_id, nome, fone, criado } = req.body;
+  try {
+    await pool.query(
+      `INSERT INTO grupo_membros(id,grupo_id,nome,fone,criado) VALUES($1,$2,$3,$4,$5)
+       ON CONFLICT(id) DO UPDATE SET nome=$3,fone=$4`,
+      [id, grupo_id, nome, fone||'', criado||'']
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/grupo_membros/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM grupo_membros WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- BOLÕES ----
 app.get('/api/boloes', async (req, res) => {
   try {
@@ -418,6 +445,17 @@ pool.query(`ALTER TABLE config ADD COLUMN IF NOT EXISTS admin_fone TEXT DEFAULT 
 // Migração: telefone do usuário (preenchido manualmente na importação — o WhatsApp não entrega
 // telefone de participantes com privacidade ativada, então o admin digita à mão quando descobre)
 pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fone TEXT DEFAULT ''`).catch(() => {});
+// Migração: cadastro de apostadores do grupo, independente de bolão. Um grupo de WhatsApp é uma
+// lista permanente de possíveis apostadores; um bolão é uma oferta pontual e aleatória que o
+// lotérico faz pra um ou mais grupos — ninguém é obrigado a comprar, então "quem está no grupo"
+// não pode depender de existir algum bolão ativo (membros só existiam presos a bolao_id).
+pool.query(`CREATE TABLE IF NOT EXISTS grupo_membros (
+  id       TEXT PRIMARY KEY,
+  grupo_id TEXT REFERENCES grupos(id) ON DELETE CASCADE,
+  nome     TEXT NOT NULL,
+  fone     TEXT DEFAULT '',
+  criado   TEXT DEFAULT ''
+)`).catch(() => {});
 // Migração: vínculo de verdade bolão→grupo (antes só existia bolões.grupo como texto livre,
 // que ficava "órfão" quando o grupo era apagado ou renomeado). ON DELETE SET NULL: apagar um
 // grupo não apaga os bolões vinculados, só desfaz o vínculo (o campo texto `grupo` continua

@@ -6,7 +6,7 @@ const S = {
   user: null, tela: 'home', loteria: null, bolao: null, grupoAtual: null,
   stack: [], ze_i: 0, ze_t: null, dtaps: 0, dtap_t: 0,
   charts: {}, resultados: [], cartela: null, statsF: null,
-  cache: { boloes:[], grupos:[], vendas:[], pags:[], usuarios:[], ctrl:{ bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] } },
+  cache: { boloes:[], grupos:[], vendas:[], pags:[], usuarios:[], grupoMembros:[], ctrl:{ bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] } },
 };
 const $ = id => document.getElementById(id);
 const fmt$ = n => 'R$ ' + (n||0).toLocaleString('pt-BR',{minimumFractionDigits:2});
@@ -167,9 +167,10 @@ const _api = {
 };
 
 async function carregarDados() {
-  const [boloes,grupos,vendas,pags,usuarios,ctrl] = await Promise.all([
+  const [boloes,grupos,vendas,pags,usuarios,ctrl,grupoMembros] = await Promise.all([
     _api.get('/api/boloes'), _api.get('/api/grupos'), _api.get('/api/vendas'),
     _api.get('/api/pagamentos'), _api.get('/api/usuarios'), _api.get('/api/config'),
+    _api.get('/api/grupo_membros'),
   ]);
   // PostgreSQL retorna NUMERIC como string — converter para number
   if (Array.isArray(boloes))   S.cache.boloes   = boloes.map(b => ({
@@ -184,6 +185,7 @@ async function carregarDados() {
   if (Array.isArray(pags))     S.cache.pags     = pags.map(p => ({ ...p, concurso: +p.concurso||0 }));
   if (Array.isArray(usuarios)) S.cache.usuarios = usuarios;
   if (ctrl && ctrl.id)         S.cache.ctrl     = ctrl;
+  if (Array.isArray(grupoMembros)) S.cache.grupoMembros = grupoMembros;
 }
 
 // Um bolão pertence a um grupo só se o grupo_id bater (vínculo de verdade).
@@ -210,6 +212,13 @@ const DB = {
     list: ()  => S.cache.grupos || [],
     save: g   => { const l=S.cache.grupos; const i=l.findIndex(x=>x.id===g.id); i>=0?l[i]=g:l.push(g); _api.post('/api/grupos',g); },
     del:  id  => { S.cache.grupos=S.cache.grupos.filter(g=>g.id!==id); _api.del('/api/grupos/'+id); },
+  },
+  // Cadastro de apostadores do grupo — independente de bolão (ver bolaoDoGrupo acima: um bolão é
+  // uma oferta pontual, o grupo é a lista permanente de quem pode aceitar comprar cota).
+  grupoMembros: {
+    list:    grupoId => (S.cache.grupoMembros||[]).filter(m=>m.grupo_id===grupoId),
+    save:    m        => { const l=S.cache.grupoMembros; const i=l.findIndex(x=>x.id===m.id); i>=0?l[i]=m:l.push(m); _api.post('/api/grupo_membros',m); },
+    del:     id        => { S.cache.grupoMembros=S.cache.grupoMembros.filter(m=>m.id!==id); _api.del('/api/grupo_membros/'+id); },
   },
   vendas: {
     list: ()  => S.cache.vendas || [],
@@ -1005,8 +1014,27 @@ const R = {
     if (!g) { R.ir('grupos'); return; }
     $('h-title').textContent=g.nome;
     const boloesGrupo=DB.boloes.list().filter(b=>bolaoDoGrupo(b,g));
+    const roster=DB.grupoMembros.list(g.id);
 
-    let html=`<div class="sectt mb12">Bolões do grupo</div>`;
+    let html=`<div class="fxb mb12"><div class="sectt">Apostadores do grupo</div>
+      <div class="fx" style="gap:6px">
+        <button class="btn btn-o btn-sm" onclick="R._mAddRosterManual('${g.id}')">➕ Adicionar</button>
+        <button class="btn btn-o btn-sm" onclick="R._mImportarRoster('${g.id}')">📋 Colar lista</button>
+      </div></div>`;
+    if (!roster.length) {
+      html+=`<div class="empty"><div class="ei">👥</div><p>Nenhum apostador cadastrado neste grupo ainda.</p>
+        <p class="txs muted mt8">Esse cadastro é permanente — não depende de ter um bolão ativo agora.</p></div>`;
+    } else {
+      html+=roster.map(m=>`<div class="lr">
+          <div><div style="font-weight:500">${m.nome}</div><div class="txs muted">${m.fone||'<em>sem telefone</em>'}</div></div>
+          <div class="fx" style="gap:6px">
+            <button class="btn btn-o btn-sm" onclick="R._mEditRoster('${m.id}')">✏️</button>
+            <button class="btn btn-o btn-sm" onclick="R._delRoster('${m.id}')">🗑️</button>
+          </div>
+        </div>`).join('');
+    }
+
+    html+=`<div class="divider"></div><div class="sectt mb12">Bolões do grupo</div>`;
     if (!boloesGrupo.length) {
       html+=`<div class="empty"><div class="ei">🎲</div><p>Nenhum bolão vinculado a este grupo ainda.</p></div>`;
     } else {
@@ -1045,6 +1073,91 @@ const R = {
     b.membros[idx].pago=!b.membros[idx].pago;
     DB.boloes.save(b);
     R._grupoDet();
+  },
+
+  // ---- CADASTRO DE APOSTADORES DO GRUPO (independente de bolão) ----
+  _mAddRosterManual(grupoId) {
+    MODAL.open(`<div class="m-title">➕ Adicionar apostador</div>
+      <div class="fg"><label>Nome</label><input id="rmn" type="text" placeholder="Nome completo"></div>
+      <div class="fg"><label>Telefone (opcional)</label><input id="rmf" type="text" placeholder="+55 61 99999-9999"></div>
+      <input type="hidden" id="rmg" value="${grupoId}">
+      <button class="btn btn-p btn-f" onclick="R._saveRosterManual()">Salvar</button>`);
+  },
+  _mEditRoster(id) {
+    const m=(S.cache.grupoMembros||[]).find(x=>x.id===id); if(!m) return;
+    MODAL.open(`<div class="m-title">✏️ Editar apostador</div>
+      <div class="fg"><label>Nome</label><input id="rmn" type="text" value="${m.nome}"></div>
+      <div class="fg"><label>Telefone (opcional)</label><input id="rmf" type="text" value="${m.fone||''}"></div>
+      <input type="hidden" id="rmg" value="${m.grupo_id}">
+      <input type="hidden" id="rmid" value="${m.id}">
+      <button class="btn btn-p btn-f" onclick="R._saveRosterManual()">Salvar</button>`);
+  },
+  _saveRosterManual() {
+    const nome=$('rmn')?.value?.trim(); if(!nome){alert('Informe o nome.');return;}
+    const id=$('rmid')?.value||uid();
+    DB.grupoMembros.save({id, grupo_id:$('rmg').value, nome, fone:normalizarFone($('rmf')?.value||''), criado:hoje()});
+    MODAL.close(); R._grupoDet();
+  },
+  _delRoster(id) {
+    if(!confirm('Remover este apostador do cadastro do grupo?')) return;
+    DB.grupoMembros.del(id); R._grupoDet();
+  },
+  _mImportarRoster(grupoId, textoPrevio) {
+    const g=DB.grupos.list().find(x=>x.id===grupoId); if(!g) return;
+    R._colarRoster={grupoId};
+    MODAL.open(`
+      <div class="m-title">📋 Colar lista — ${g.nome}</div>
+      <div class="fg">
+        <label>Cole a lista de participantes copiada do WhatsApp (um por linha)</label>
+        <textarea id="imp-roster-texto" rows="8" placeholder="Ex:&#10;João Silva: +55 61 99999-9999&#10;Maria +5561988887777&#10;+55 61 97777-6666">${textoPrevio||''}</textarea>
+      </div>
+      <button class="btn btn-p btn-f mt8" onclick="R._analisarRosterColado()">🔍 Analisar lista</button>
+      <button class="btn btn-o btn-f mt8" onclick="MODAL.close()">Cancelar</button>
+    `);
+  },
+  _analisarRosterColado() {
+    const texto=$('imp-roster-texto')?.value||'';
+    const parsed=R._parseLinhasWA(texto);
+    if(!parsed.length){alert('Nenhum apostador reconhecido no texto colado.');return;}
+    R._colarRoster={grupoId:R._colarRoster?.grupoId, texto, parsed};
+    MODAL.open(`
+      <div class="m-title">📋 ${parsed.length} apostador${parsed.length!==1?'es':''} encontrado${parsed.length!==1?'s':''}</div>
+      <p class="muted txs mb12">Confira e desmarque quem não deve ser cadastrado:</p>
+      <div style="max-height:45vh;overflow-y:auto">
+        ${parsed.map((p,i)=>`
+          <div class="fr mb8" style="align-items:center;gap:8px">
+            <input type="checkbox" id="ric-${i}" checked>
+            <div style="flex:1">
+              <input type="text" id="rin-${i}" value="${(p.nome||'').replace(/"/g,'&quot;')}" placeholder="Nome"
+                     style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text);margin-bottom:4px">
+              <input type="text" id="rif-${i}" value="${p.fone||''}" placeholder="Telefone (opcional)"
+                     style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
+            </div>
+          </div>`).join('')}
+      </div>
+      <button class="btn btn-p btn-f mt12" onclick="R._salvarRosterColado()">✅ Salvar todos</button>
+      <button class="btn btn-o btn-f mt8" onclick="R._mImportarRoster(R._colarRoster.grupoId, R._colarRoster.texto)">◀ Voltar</button>
+    `);
+  },
+  _salvarRosterColado() {
+    const {grupoId, parsed} = R._colarRoster||{};
+    if(!grupoId||!parsed) return;
+    const existentes=DB.grupoMembros.list(grupoId);
+    const fonesExistentes=new Set(existentes.map(m=>normalizarFone(m.fone)).filter(Boolean));
+    let salvos=0;
+    parsed.forEach((p,i)=>{
+      if(!$(`ric-${i}`)?.checked) return;
+      const nome=$(`rin-${i}`)?.value?.trim()||'Sem nome';
+      const fone=normalizarFone($(`rif-${i}`)?.value||'');
+      if(fone && fonesExistentes.has(fone)) return; // já cadastrado
+      DB.grupoMembros.save({id:uid(), grupo_id:grupoId, nome, fone, criado:hoje()});
+      if(fone) fonesExistentes.add(fone);
+      salvos++;
+    });
+    R._colarRoster=null;
+    MODAL.close();
+    R._grupoDet();
+    TOAST.show(`✅ ${salvos} apostador${salvos!==1?'es':''} cadastrado${salvos!==1?'s':''}.`, 'ok');
   },
 
   // ---- BOLÃO DETALHE ----
@@ -1367,7 +1480,8 @@ const R = {
   // \b do regex não funciona bem com "ê", então checa manualmente o caractere seguinte.
   _ehVoceOuYou(linha) {
     const low = linha.toLowerCase();
-    for (const pref of ['você', 'voce', 'you']) {
+    // 'tú' aparece quando o WhatsApp do aparelho está em espanhol (chip espanhol usado pelo bot)
+    for (const pref of ['você', 'voce', 'you', 'tú']) {
       if (low.startsWith(pref)) {
         const prox = low.charAt(pref.length);
         if (!prox || !/[a-z]/i.test(prox)) return true;

@@ -24,6 +24,14 @@ CREATE TABLE IF NOT EXISTS boloes (
   resultado   JSONB
 );
 
+CREATE TABLE IF NOT EXISTS grupo_membros (
+  id       TEXT PRIMARY KEY,
+  grupo_id TEXT REFERENCES grupos(id) ON DELETE CASCADE,
+  nome     TEXT NOT NULL,
+  fone     TEXT DEFAULT '',
+  criado   TEXT DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS membros (
   id       TEXT PRIMARY KEY,
   bolao_id TEXT REFERENCES boloes(id) ON DELETE CASCADE,
