@@ -3,7 +3,7 @@
 // ESTADO GLOBAL
 // =============================================
 const S = {
-  user: null, tela: 'home', loteria: null, bolao: null,
+  user: null, tela: 'home', loteria: null, bolao: null, grupoAtual: null,
   stack: [], ze_i: 0, ze_t: null, dtaps: 0, dtap_t: 0,
   charts: {}, resultados: [], cartela: null, statsF: null,
   cache: { boloes:[], grupos:[], vendas:[], pags:[], usuarios:[], ctrl:{ bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] } },
@@ -608,7 +608,7 @@ const R = {
     // Atualiza botão ativo no nav correto
     const nav = AUTH.isAdmin() ? $('nav-admin') : $('nav-user');
     nav?.querySelectorAll('.nb').forEach(b=>b.classList.toggle('on',b.dataset.v===tela));
-    const noBack=['home','admin','resultados','perfil','controle','ia'];
+    const noBack=['home','admin','resultados','perfil','controle','ia','grupos'];
     $('btn-back').hidden=noBack.includes(tela);
     const fn=R['_'+tela];
     if(fn) fn(params);
@@ -626,25 +626,18 @@ const R = {
   },
 
   async _homeAdmin() {
-    const bs=DB.boloes.list();
     $('view-home').innerHTML=`
       <div style="margin-bottom:14px">
         <div style="font-size:1.15rem;font-weight:700">Olá, ${S.user.nome.split(' ')[0]}! 👋</div>
-        <div class="muted tsm">Escolha a loteria para gerenciar os bolões</div>
+        <div class="muted tsm">Resultados ao vivo — gerencie os grupos na aba Grupos</div>
       </div>
       <div class="grid-lt">
         ${Object.values(LOTERIAS).map(lt=>{
-          // Total de bolões da loteria (qualquer status) — antes só contava status='ativo', o que
-          // fazia bolões já conferidos "sumirem" da home mesmo continuando a existir de verdade.
-          const todos=bs.filter(b=>b.loteria===lt.id);
-          const aguardando=todos.filter(b=>b.status==='ativo'||b.status==='aguardando_resultado').length;
-          const cnt=todos.length;
           return`<div class="lt-card" style="background:linear-gradient(135deg,${lt.cor},${lt.cor2})" onclick="R._ltClick('${lt.id}')">
             <span class="lt-emoji">${lt.emoji}</span>
             <div id="ld-${lt.id}" class="lt-dados-live"><div class="lt-loading-dot"></div></div>
             <div class="lt-nome">${lt.nome}</div>
             <div class="lt-dias">${lt.dias}</div>
-            <div class="lt-cnt">${cnt} ${cnt!==1?'bolões':'bolão'}${aguardando?` · ${aguardando} aguardando resultado`:''}</div>
           </div>`;
         }).join('')}
       </div>`;
@@ -999,6 +992,115 @@ const R = {
   _delBolao(id, nome) {
     if(!confirm(`Excluir o bolão "${nome}"?\n\nTodos os membros e pagamentos vinculados também serão removidos. Esta ação não pode ser desfeita.`)) return;
     DB.boloes.del(id); R._boloes();
+  },
+
+  // ---- GRUPOS DE BOLÕES (acompanhamento: quem aceitou, pagou ou está pendente) ----
+  // Nem todo mundo do grupo aceita a cota quando o lotérico oferece — por isso a navegação
+  // principal é por GRUPO (quem topou participar de quê), não mais por loteria.
+  //
+  // Status de cada membro, cruzando membros[].pago com a tabela de comprovantes (pagamentos):
+  //   'pago'      — m.pago === true (admin confirmou o pagamento)
+  //   'aprovacao' — tem comprovante enviado (pagamentos.status='pendente') mas admin ainda não confirmou
+  //   'pendente'  — aceitou a cota mas ainda não mandou comprovante nem foi marcado como pago
+  _statusMembro(b, m) {
+    if (m.pago) return 'pago';
+    const comprovante = (S.cache.pags||[]).find(p =>
+      p.bolao_id===b.id && (p.membro||'').trim().toLowerCase()===m.nome.trim().toLowerCase() && p.status==='pendente'
+    );
+    return comprovante ? 'aprovacao' : 'pendente';
+  },
+
+  _grupos() {
+    if(!AUTH.isAdmin()){R.ir('home');return;}
+    $('h-title').textContent='Grupos de Bolões';
+    const gs=DB.grupos.list();
+    if (!gs.length) {
+      $('view-grupos').innerHTML=`<div class="empty"><div class="ei">${WPP_SVG(52)}</div><p>Nenhum grupo cadastrado.</p><p class="txs muted mt8">Cadastre em Admin → WhatsApp.</p></div>`;
+      return;
+    }
+    $('view-grupos').innerHTML = gs.map(g=>{
+      const boloesGrupo = DB.boloes.list().filter(b=>bolaoDoGrupo(b,g));
+      const membrosUnicos = {};
+      // Se a pessoa está em mais de um bolão do grupo, mantém sempre o status "menos resolvido"
+      // (pendente esconde aprovação, aprovação esconde pago) — senão um bolão já pago escondia
+      // um comprovante aguardando aprovação em outro bolão do mesmo grupo.
+      const PRIORIDADE = { pendente:2, aprovacao:1, pago:0 };
+      boloesGrupo.forEach(b=>(b.membros||[]).forEach(m=>{
+        const k=m.nome.trim().toLowerCase();
+        const st=R._statusMembro(b,m);
+        if (!membrosUnicos[k] || PRIORIDADE[st]>PRIORIDADE[membrosUnicos[k]]) membrosUnicos[k]=st;
+      }));
+      const total=Object.keys(membrosUnicos).length;
+      const pagos=Object.values(membrosUnicos).filter(s=>s==='pago').length;
+      const aprovacao=Object.values(membrosUnicos).filter(s=>s==='aprovacao').length;
+      const pendentes=Object.values(membrosUnicos).filter(s=>s==='pendente').length;
+      return `<div class="card cc mb12" onclick="R._irGrupoDet('${g.id}')">
+        <div class="fxb mb8">
+          <div style="font-weight:700">${g.nome} ${g.jid?'<span class="badge txs" style="background:var(--primary);color:#fff;font-size:.6rem">Bot ✓</span>':''}</div>
+          <span class="txs muted">${boloesGrupo.length===1?'1 bolão':`${boloesGrupo.length} bolões`}</span>
+        </div>
+        ${total?`
+        <div class="fxb txs">
+          <span style="color:var(--primary)">${pagos} pago${pagos!==1?'s':''}</span>
+          ${aprovacao?`<span style="color:var(--gold)">${aprovacao} aguardando aprovação</span>`:''}
+          <span class="muted">${pendentes} pendente${pendentes!==1?'s':''}</span>
+        </div>
+        <div class="txs muted mt4">${total} aceitaram participar</div>`
+        :`<div class="txs muted">Ninguém aceitou participar ainda.</div>`}
+      </div>`;
+    }).join('');
+  },
+
+  // Guarda qual grupo abrir e navega — a própria R.ir() cuida do stack/histórico de "voltar"
+  _irGrupoDet(grupoId) { S.grupoAtual=grupoId; R.ir('grupoDet'); },
+
+  // Handler de tela (chamado pelo roteador via R.ir('grupoDet')) — lê o grupo de S.grupoAtual,
+  // igual ao padrão de _bolao() lendo S.bolao.
+  _grupoDet() {
+    const g=DB.grupos.list().find(x=>x.id===S.grupoAtual);
+    if (!g) { R.ir('grupos'); return; }
+    $('h-title').textContent=g.nome;
+    const boloesGrupo=DB.boloes.list().filter(b=>bolaoDoGrupo(b,g));
+
+    let html=`<div class="sectt mb12">Bolões do grupo</div>`;
+    if (!boloesGrupo.length) {
+      html+=`<div class="empty"><div class="ei">🎲</div><p>Nenhum bolão vinculado a este grupo ainda.</p></div>`;
+    } else {
+      html+=boloesGrupo.map(b=>{
+        const lt=LOTERIAS[b.loteria];
+        return `<div class="card cc mb12" style="border-left:4px solid ${lt?.cor||'#666'}" onclick="R._bClick('${b.id}')">
+          <div class="bl-nome">${lt?.emoji||''} ${b.nome}</div>
+          <div class="bl-meta">${lt?.nome||b.loteria} · Concurso #${b.concurso} · ${(b.membros||[]).length} aceitaram</div>
+          <div class="bl-row mt8"><span class="muted tsm">${b.cotas_total} cotas · ${fmt$(b.cotas_total*b.valor_cota)}</span>
+          <span class="badge b-${b.status==='ativo'?'ativo':'pend'}">${b.status}</span></div>
+        </div>`;
+      }).join('');
+    }
+
+    html+=`<div class="divider"></div><div class="sectt mb12">Participantes</div>`;
+    const linhas=[];
+    boloesGrupo.forEach(b=>(b.membros||[]).forEach((m,i)=>linhas.push({b,m,i})));
+    if (!linhas.length) {
+      html+=`<div class="empty"><div class="ei">👥</div><p>Ninguém aceitou participar ainda.</p></div>`;
+    } else {
+      html+=linhas.map(({b,m,i})=>{
+        const st=R._statusMembro(b,m);
+        const rotulo = st==='pago' ? 'Pago ✓' : st==='aprovacao' ? 'Aguardando aprovação' : 'Pendente';
+        const cor = st==='pago' ? 'b-pago' : st==='aprovacao' ? 'b-pend' : 'b-pend';
+        return `<div class="lr">
+          <div><div style="font-weight:500">${m.nome}</div><div class="txs muted">${b.nome} · ${m.cotas} cota${m.cotas!==1?'s':''} · ${fmt$(m.cotas*b.valor_cota)}</div></div>
+          <button class="btn btn-o btn-sm" onclick="R._togglePagDeGrupo('${b.id}',${i})" ${st==='aprovacao'?'title="Tem comprovante aguardando aprovação em Admin → Pagamentos"':''}><span class="badge ${cor}" style="margin-right:4px">${rotulo}</span></button>
+        </div>`;
+      }).join('');
+    }
+    $('view-grupoDet').innerHTML=html;
+  },
+  // Toggle pago chamado a partir da tela de grupo — recarrega a mesma tela de grupo, não a de bolão
+  _togglePagDeGrupo(bid,idx) {
+    const b=DB.boloes.get(bid); if(!b) return;
+    b.membros[idx].pago=!b.membros[idx].pago;
+    DB.boloes.save(b);
+    R._grupoDet();
   },
 
   // ---- BOLÃO DETALHE ----
@@ -1579,7 +1681,7 @@ const R = {
     const g = DB.grupos.list().find(x=>x.id===id); if(!g) return;
     const vinculados = DB.boloes.list().filter(b=>bolaoDoGrupo(b,g));
     const aviso = vinculados.length
-      ? `Este grupo tem ${vinculados.length} bolão${vinculados.length!==1?'ões':''} vinculado${vinculados.length!==1?'s':''}: ${vinculados.map(b=>b.nome).join(', ')}.\n\nOs bolões continuam existindo, mas perdem o vínculo com o grupo. Remover mesmo assim?`
+      ? `Este grupo tem ${vinculados.length===1?'1 bolão':`${vinculados.length} bolões`} vinculado${vinculados.length!==1?'s':''}: ${vinculados.map(b=>b.nome).join(', ')}.\n\nOs bolões continuam existindo, mas perdem o vínculo com o grupo. Remover mesmo assim?`
       : 'Remover grupo?';
     if(!confirm(aviso))return;
     DB.grupos.del(id); R._whatsapp();
