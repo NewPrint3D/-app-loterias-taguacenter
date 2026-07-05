@@ -239,12 +239,12 @@ app.get('/api/grupo_membros', async (req, res) => {
 });
 
 app.post('/api/grupo_membros', async (req, res) => {
-  const { id, grupo_id, nome, fone, criado } = req.body;
+  const { id, grupo_id, nome, fone, wpp_jid, ativo, criado } = req.body;
   try {
     await pool.query(
-      `INSERT INTO grupo_membros(id,grupo_id,nome,fone,criado) VALUES($1,$2,$3,$4,$5)
-       ON CONFLICT(id) DO UPDATE SET nome=$3,fone=$4`,
-      [id, grupo_id, nome, fone||'', criado||'']
+      `INSERT INTO grupo_membros(id,grupo_id,nome,fone,wpp_jid,ativo,criado) VALUES($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT(id) DO UPDATE SET nome=$3,fone=$4,wpp_jid=$5,ativo=$6`,
+      [id, grupo_id, nome, fone||'', wpp_jid||'', ativo!==false, criado||'']
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -456,6 +456,27 @@ pool.query(`CREATE TABLE IF NOT EXISTS grupo_membros (
   fone     TEXT DEFAULT '',
   criado   TEXT DEFAULT ''
 )`).catch(() => {});
+// Migração: identificador WhatsApp do participante (LID ou número@s.whatsapp.net) — permite
+// mandar DM e reconhecer quem é quem mesmo quando o WhatsApp esconde o telefone real (LID).
+// `ativo`: participante que saiu do grupo (group-participants.update, action 'remove') vira
+// inativo em vez de apagado — mantém histórico e evita recriar duplicado se ele voltar.
+// Índice único PARCIAL (só quando wpp_jid não é vazio) — participantes cadastrados manualmente
+// não têm wpp_jid, então vários registros com '' precisam coexistir sem conflito; mas dois
+// registros do MESMO grupo com o MESMO wpp_jid real seriam duplicata de verdade (evita corrida
+// entre a importação automática e os listeners messages.upsert/group-participants.update
+// tentando inserir a mesma pessoa quase ao mesmo tempo — sem isso, os dois SELECTs viam "não
+// existe" antes de qualquer INSERT terminar e criavam duas linhas pro mesmo participante, o que
+// fazia o envio de DM mandar a mensagem duas vezes pra ela).
+// As 3 statements ficam numa ÚNICA pool.query (protocolo simple query do driver `pg` executa em
+// sequência na mesma conexão) — em vez de 3 chamadas separadas, que poderiam abrir conexões
+// concorrentes diferentes e rodar o CREATE INDEX antes do ADD COLUMN da própria migração ter
+// commitado (viraria "column wpp_jid does not exist", engolido em silêncio pelo .catch).
+pool.query(`
+  ALTER TABLE grupo_membros ADD COLUMN IF NOT EXISTS wpp_jid TEXT DEFAULT '';
+  ALTER TABLE grupo_membros ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT TRUE;
+  CREATE UNIQUE INDEX IF NOT EXISTS grupo_membros_grupo_wpp_jid_idx
+    ON grupo_membros(grupo_id, wpp_jid) WHERE wpp_jid <> '';
+`).catch(() => {});
 // Migração: vínculo de verdade bolão→grupo (antes só existia bolões.grupo como texto livre,
 // que ficava "órfão" quando o grupo era apagado ou renomeado). ON DELETE SET NULL: apagar um
 // grupo não apaga os bolões vinculados, só desfaz o vínculo (o campo texto `grupo` continua
@@ -553,6 +574,33 @@ async function conectarBot() {
           if (msg.key.fromMe) continue;
           const groupJid = msg.key.remoteJid;
           if (!groupJid?.endsWith('@g.us')) continue; // só grupos
+          const senderJid = msg.key.participant || groupJid;
+
+          // ---- Atualiza/cria o participante em grupo_membros a partir do pushName ----
+          // Baileys só expõe o nome de exibição (pushName) quando a pessoa manda mensagem —
+          // groupMetadata (importação inicial) não devolve nome nenhum. Só sobrescreve nome
+          // vazio/"Sem nome" — preserva uma correção manual feita pelo admin depois.
+          if (msg.pushName) {
+            try {
+              const { rows: gRows } = await pool.query('SELECT id FROM grupos WHERE jid=$1', [groupJid]);
+              if (gRows.length) {
+                const grupoId = gRows[0].id;
+                const oculto = senderJid.endsWith('@lid');
+                const foneAuto = oculto ? '' : senderJid.replace('@s.whatsapp.net','').replace(/\D/g,'');
+                // ON CONFLICT resolve inserir-ou-atualizar num só comando atômico (evita corrida
+                // com a importação/entrada no grupo tentando cadastrar a mesma pessoa junto).
+                // Só sobrescreve nome vazio/"Sem nome" — preserva uma correção manual do admin.
+                await pool.query(
+                  `INSERT INTO grupo_membros(id,grupo_id,nome,fone,wpp_jid,ativo,criado) VALUES($1,$2,$3,$4,$5,true,$6)
+                   ON CONFLICT (grupo_id,wpp_jid) WHERE wpp_jid <> '' DO UPDATE SET
+                     ativo=true,
+                     nome = CASE WHEN grupo_membros.nome='' OR LOWER(grupo_membros.nome)='sem nome'
+                                 THEN EXCLUDED.nome ELSE grupo_membros.nome END`,
+                  [crypto.randomUUID(), grupoId, msg.pushName, foneAuto, senderJid, new Date().toISOString().split('T')[0]]
+                );
+              }
+            } catch (e) { console.error('Erro ao atualizar participante via pushName:', e.message); }
+          }
 
           // Verifica se este grupo está com cadastro ativo
           const cad = await pool.query(
@@ -572,7 +620,6 @@ async function conectarBot() {
 
           // Valida que parece um nome (letras, acentos, espaços — 3 a 60 chars)
           const eNome = /^[a-zA-ZÀ-ÿ\s]{3,60}$/.test(texto);
-          const senderJid = msg.key.participant || groupJid;
           const fone = senderJid.replace('@s.whatsapp.net', '').replace(/\D/g, '');
 
           if (!eNome) {
@@ -614,6 +661,29 @@ async function conectarBot() {
           console.error('Erro no cadastro automático:', e.message);
         }
       }
+    });
+
+    // ---- LISTENER: entrada/saída de participante nos grupos vinculados ----
+    botSock.ev.on('group-participants.update', async ({ id: groupJid, participants, action }) => {
+      try {
+        const { rows: gRows } = await pool.query('SELECT id FROM grupos WHERE jid=$1', [groupJid]);
+        if (!gRows.length) return; // grupo não vinculado a nenhum grupo do app
+        const grupoId = gRows[0].id;
+        const hoje = new Date().toISOString().split('T')[0];
+        for (const jid of participants) {
+          if (action === 'add') {
+            const oculto = jid.endsWith('@lid');
+            const fone = oculto ? '' : jid.replace('@s.whatsapp.net','').replace(/\D/g,'');
+            await pool.query(
+              `INSERT INTO grupo_membros(id,grupo_id,nome,fone,wpp_jid,ativo,criado) VALUES($1,$2,'Sem nome',$3,$4,true,$5)
+               ON CONFLICT (grupo_id,wpp_jid) WHERE wpp_jid <> '' DO UPDATE SET ativo=true`,
+              [crypto.randomUUID(), grupoId, fone, jid, hoje]
+            );
+          } else if (action === 'remove') {
+            await pool.query('UPDATE grupo_membros SET ativo=false WHERE grupo_id=$1 AND wpp_jid=$2', [grupoId, jid]);
+          }
+        }
+      } catch (e) { console.error('Erro no listener group-participants.update:', e.message); }
     });
 
     botSock.ev.on('connection.update', async upd => {
@@ -694,6 +764,37 @@ app.post('/api/wpp/desconectar', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Importa/atualiza todos os participantes de um grupo WhatsApp em grupo_membros — chamado ao
+// vincular um grupo do app a um wpp_jid (PUT /api/grupos/:id/jid) e pelo botão manual "⬇️
+// Importar". Baileys não expõe o nome de exibição (pushName) via groupMetadata — só aparece
+// quando a pessoa manda mensagem (ver listener messages.upsert abaixo) — então participante novo
+// entra como "Sem nome" até falar pela primeira vez. Participante que já existia (mesmo wpp_jid)
+// só é reativado (ativo=true), nunca tem o nome sobrescrito — preserva edição manual ou pushName
+// já capturado.
+async function importarParticipantesGrupo(grupoId, wppJid) {
+  if (!botSock || botStatus !== 'conectado') throw new Error('Bot não conectado.');
+  const meta = await botSock.groupMetadata(wppJid);
+  const hoje = new Date().toISOString().split('T')[0];
+  let novos = 0;
+  for (const p of meta.participants) {
+    const oculto = p.id.endsWith('@lid');
+    const fone = oculto ? '' : p.id.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+    // ON CONFLICT (índice único parcial grupo_id+wpp_jid) resolve inserir-ou-reativar num só
+    // comando atômico — sem essa garantia, dois processos tentando cadastrar o mesmo participante
+    // quase ao mesmo tempo (esta importação e os listeners do bot) podiam criar linha duplicada.
+    // `xmax=0` no RETURNING diz se a linha foi inserida agora (não conta reativação como "novo").
+    const { rows } = await pool.query(
+      `INSERT INTO grupo_membros(id,grupo_id,nome,fone,wpp_jid,ativo,criado)
+       VALUES($1,$2,'Sem nome',$3,$4,true,$5)
+       ON CONFLICT (grupo_id,wpp_jid) WHERE wpp_jid <> '' DO UPDATE SET ativo=true
+       RETURNING (xmax = 0) AS inserted`,
+      [crypto.randomUUID(), grupoId, fone, p.id, hoje]
+    );
+    if (rows[0]?.inserted) novos++;
+  }
+  return { total: meta.participants.length, novos };
+}
+
 app.get('/api/wpp/participantes/:jid', async (req, res) => {
   if (!botSock || botStatus !== 'conectado')
     return res.status(503).json({ ok: false, error: 'Bot não conectado. Conecte o bot no Painel Dev.' });
@@ -731,19 +832,36 @@ app.get('/api/wpp/grupos-bot', async (req, res) => {
 });
 
 app.put('/api/grupos/:id/jid', async (req, res) => {
+  const jid = req.body.jid || '';
   try {
-    await pool.query('UPDATE grupos SET jid=$1 WHERE id=$2', [req.body.jid || '', req.params.id]);
-    res.json({ ok: true });
+    await pool.query('UPDATE grupos SET jid=$1 WHERE id=$2', [jid, req.params.id]);
+    let importacao = null;
+    if (jid) {
+      try { importacao = await importarParticipantesGrupo(req.params.id, jid); }
+      catch (e) { console.error('Importação automática ao vincular grupo falhou:', e.message); }
+    }
+    res.json({ ok: true, importacao });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/grupos/:id/importar', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT jid FROM grupos WHERE id=$1', [req.params.id]);
+    if (!rows.length || !rows[0].jid) return res.status(400).json({ ok: false, error: 'Grupo sem vínculo com o bot ainda.' });
+    const importacao = await importarParticipantesGrupo(req.params.id, rows[0].jid);
+    res.json({ ok: true, importacao });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 app.post('/api/wpp/enviar', async (req, res) => {
   if (!botSock || botStatus !== 'conectado')
     return res.status(503).json({ error: 'Bot não conectado' });
-  const { targets, mensagem, imagem } = req.body;
+  const { targets, mensagem, imagem, broadcast } = req.body;
   if (!Array.isArray(targets) || !targets.length || !mensagem)
     return res.status(400).json({ error: 'Parâmetros inválidos' });
 
+  // "Todos os grupos" de uma vez é o cenário de maior risco de bloqueio por spam — delay maior
+  // e aleatório (8-15s) nesse caso; demais envios (grupo selecionado, DM individual) mantêm 3s.
   const resultados = [];
   for (const jid of targets) {
     try {
@@ -759,7 +877,8 @@ app.post('/api/wpp/enviar', async (req, res) => {
       console.error('Bot: falha em', jid, e.message);
       resultados.push({ jid, ok: false, erro: e.message });
     }
-    await new Promise(r => setTimeout(r, 3000));
+    const delay = broadcast ? 8000 + Math.random() * 7000 : 3000;
+    await new Promise(r => setTimeout(r, delay));
   }
   res.json({ ok: true, resultados });
 });

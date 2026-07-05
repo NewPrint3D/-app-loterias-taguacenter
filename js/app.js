@@ -216,8 +216,10 @@ const DB = {
   // Cadastro de apostadores do grupo — independente de bolão (ver bolaoDoGrupo acima: um bolão é
   // uma oferta pontual, o grupo é a lista permanente de quem pode aceitar comprar cota).
   grupoMembros: {
-    list:    grupoId => (S.cache.grupoMembros||[]).filter(m=>m.grupo_id===grupoId),
-    listAll: ()       => S.cache.grupoMembros || [],
+    // Só participantes ativos (quem saiu do grupo vira ativo=false, ver group-participants.update
+    // no backend) — não aparece em contagens/listas, mas o registro fica no banco como histórico.
+    list:    grupoId => (S.cache.grupoMembros||[]).filter(m=>m.grupo_id===grupoId && m.ativo!==false),
+    listAll: ()       => (S.cache.grupoMembros||[]).filter(m=>m.ativo!==false),
     save:    m        => { const l=S.cache.grupoMembros; const i=l.findIndex(x=>x.id===m.id); i>=0?l[i]=m:l.push(m); _api.post('/api/grupo_membros',m); },
     del:     id        => { S.cache.grupoMembros=S.cache.grupoMembros.filter(m=>m.id!==id); _api.del('/api/grupo_membros/'+id); },
   },
@@ -1018,7 +1020,8 @@ const R = {
     const roster=DB.grupoMembros.list(g.id);
 
     let html=`<div class="fxb mb12"><div class="sectt">Apostadores do grupo</div>
-      <div class="fx" style="gap:6px">
+      <div class="fx" style="gap:6px;flex-wrap:wrap">
+        ${g.jid?`<button class="btn btn-o btn-sm" onclick="R._importarRosterAuto('${g.id}')">⬇️ Importar</button>`:''}
         <button class="btn btn-o btn-sm" onclick="R._mAddRosterManual('${g.id}')">➕ Adicionar</button>
         <button class="btn btn-o btn-sm" onclick="R._mImportarRoster('${g.id}')">📋 Colar lista</button>
       </div></div>`;
@@ -1027,7 +1030,7 @@ const R = {
         <p class="txs muted mt8">Esse cadastro é permanente — não depende de ter um bolão ativo agora.</p></div>`;
     } else {
       html+=roster.map(m=>`<div class="lr">
-          <div><div style="font-weight:500">${m.nome}</div><div class="txs muted">${m.fone||'<em>sem telefone</em>'}</div></div>
+          <div><div style="font-weight:500">${m.nome} ${m.wpp_jid?'<span class="txs muted" title="Importado automaticamente do WhatsApp">🤖</span>':''}</div><div class="txs muted">${m.fone||'<em>sem telefone</em>'}</div></div>
           <div class="fx" style="gap:6px">
             <button class="btn btn-o btn-sm" onclick="R._mEditRoster('${m.id}')">✏️</button>
             <button class="btn btn-o btn-sm" onclick="R._delRoster('${m.id}')">🗑️</button>
@@ -1106,6 +1109,18 @@ const R = {
   _delRoster(id) {
     if(!confirm('Remover este apostador do cadastro do grupo?')) return;
     DB.grupoMembros.del(id); R._grupoDet();
+  },
+  // Importação automática via bot (groupMetadata) — participante novo entra como "Sem nome" até
+  // mandar uma mensagem no grupo (o nome é preenchido sozinho a partir do pushName nesse momento).
+  async _importarRosterAuto(grupoId) {
+    const r = await _api.post(`/api/grupos/${grupoId}/importar`, {});
+    if (!r) { alert('Erro de conexão.'); return; }
+    const d = await r.json().catch(()=>({ok:false}));
+    if (!d.ok) { alert(d.error||'Erro ao importar participantes.'); return; }
+    const atualizados = await _api.get('/api/grupo_membros');
+    if (Array.isArray(atualizados)) S.cache.grupoMembros = atualizados;
+    R._grupoDet();
+    TOAST.show(`✅ ${d.importacao?.novos||0} novo${d.importacao?.novos===1?'':'s'} de ${d.importacao?.total||0} participantes do grupo.`, 'ok');
   },
   _mImportarRoster(grupoId, textoPrevio) {
     const g=DB.grupos.list().find(x=>x.id===grupoId); if(!g) return;
@@ -1757,7 +1772,7 @@ const R = {
       <div class="dest-tabs mb12">
         <button class="dtab on" onclick="WPP.setDest('todos',this)">🌐 Todos</button>
         <button class="dtab" onclick="WPP.setDest('grupos',this)">📋 Grupos</button>
-        <button class="dtab" onclick="WPP.setDest('pessoa',this)">👤 Participante</button>
+        <button class="dtab" onclick="WPP.setDest('pessoa',this)">👤 Participantes</button>
       </div>
       <div id="dest-body"></div>
       <button class="btn btn-g btn-f mt8" onclick="WPP.send()">📤 Enviar</button>
@@ -2165,15 +2180,23 @@ const BOT = {
   },
 
   async vincularGrupo(grupoId, jid) {
-    await _api.put(`/api/grupos/${grupoId}/jid`, { jid });
+    const r = await _api.put(`/api/grupos/${grupoId}/jid`, { jid });
     const g = S.cache.grupos.find(x => x.id === grupoId);
     if (g) g.jid = jid;
+    // Vincular já dispara a importação automática dos participantes no backend — atualiza o
+    // cache local pra refletir sem precisar de outro login/reload.
+    if (jid && r) {
+      const d = await r.json().catch(()=>null);
+      const atualizados = await _api.get('/api/grupo_membros');
+      if (Array.isArray(atualizados)) S.cache.grupoMembros = atualizados;
+      if (d?.importacao) TOAST.show(`✅ ${d.importacao.novos} novo${d.importacao.novos===1?'':'s'} de ${d.importacao.total} participantes importados do grupo.`, 'ok');
+    }
   },
 
-  async enviarGrupos(grupos, mensagem) {
+  async enviarGrupos(grupos, mensagem, broadcast=false) {
     const targets = grupos.map(g => g.jid).filter(Boolean);
     if (!targets.length) return { ok: false, error: 'sem_jid' };
-    const r = await _api.post('/api/wpp/enviar', { targets, mensagem });
+    const r = await _api.post('/api/wpp/enviar', { targets, mensagem, broadcast });
     if (!r) return { ok: false, error: 'Falha de conexão.' };
     return await r.json().catch(() => ({ ok: false, error: 'Resposta inválida.' }));
   },
@@ -2343,7 +2366,6 @@ const WPP = {
   _selGrupos: [],
   _selParts: [],
   _volantePago: false,
-  _pendingImport: [],
   _passo: 0, _grupos: [],
 
   // ---- SELETOR DE DESTINATÁRIOS ----
@@ -2382,7 +2404,7 @@ const WPP = {
         </label>`).join('')}</div>`;
 
     } else { // pessoa
-      WPP._renderParts('');
+      WPP._renderPessoaTab();
     }
   },
 
@@ -2390,44 +2412,51 @@ const WPP = {
     WPP._selGrupos = on ? [...WPP._selGrupos, id] : WPP._selGrupos.filter(x=>x!==id);
   },
 
-  _getParticipantes() {
-    const mapa = {};
-    // Membros dos bolões (com fone, grupo, pago)
-    S.cache.boloes.forEach(b => {
-      (b.membros||[]).forEach(m => {
-        const k = m.nome.trim().toLowerCase();
-        if(!mapa[k]) mapa[k] = { nome:m.nome, fone:m.fone||'', grupos:[], pago:!!m.pago };
-        if(b.grupo && !mapa[k].grupos.includes(b.grupo)) mapa[k].grupos.push(b.grupo);
-        if(m.fone && !mapa[k].fone) mapa[k].fone = m.fone;
-        if(m.pago) mapa[k].pago = true;
-      });
-    });
-    // Cadastro de apostadores dos grupos — pra poder mandar cota/aviso individual mesmo pra quem
-    // ainda não comprou nada em nenhum bolão. "Sem nome" usa telefone/id como chave (mesmo motivo
-    // de sempre: colapsaria todo mundo sem nome identificado num só).
-    DB.grupoMembros.listAll().forEach(m => {
-      const temNomeReal = m.nome && m.nome.trim().toLowerCase()!=='sem nome';
-      const k = temNomeReal ? m.nome.trim().toLowerCase() : (m.fone?'fone:'+m.fone:'gm:'+m.id);
-      const gNome = DB.grupos.list().find(g=>g.id===m.grupo_id)?.nome || '';
-      if(!mapa[k]) mapa[k] = { nome:m.nome, fone:m.fone||'', grupos:[], pago:false };
-      if(gNome && !mapa[k].grupos.includes(gNome)) mapa[k].grupos.push(gNome);
-      if(m.fone && !mapa[k].fone) mapa[k].fone = m.fone;
-    });
-    // Apostadores registrados no app (mesmo sem bolão/grupo)
-    DB.usuarios.list().forEach(u => {
-      const k = u.nome.trim().toLowerCase();
-      if(!mapa[k]) mapa[k] = { nome:u.nome, fone:u.fone||'', grupos:[], pago:false };
-      else if(!mapa[k].fone) mapa[k].fone = u.fone||'';
-    });
-    return Object.values(mapa).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
+  // ---- ABA PARTICIPANTE: escolhe 1 grupo, lista vem só de grupo_membros (importação automática) ----
+  _grupoSelecionado: null,
+
+  _renderPessoaTab() {
+    const el = $('dest-body'); if(!el) return;
+    const gs = DB.grupos.list();
+    if (!gs.length) {
+      el.innerHTML = `<div class="ia-aviso">Nenhum grupo cadastrado ainda — cadastre em Admin → WhatsApp.</div>`;
+      return;
+    }
+    if (!WPP._grupoSelecionado) {
+      el.innerHTML = `
+        <p class="muted txs mb8">Selecione um grupo pra ver os participantes (importados automaticamente):</p>
+        <div class="dest-lista">${gs.map(g=>{
+          const n=DB.grupoMembros.list(g.id).length;
+          return `<div class="dest-item" style="cursor:pointer" onclick="WPP._selecionarGrupoParticipantes('${g.id}')">
+            <div class="dest-info">
+              <div class="dest-nome">${g.nome}</div>
+              <div class="dest-sub txs muted">${n} apostador${n!==1?'es':''} cadastrado${n!==1?'s':''}</div>
+            </div>
+          </div>`;
+        }).join('')}</div>`;
+      return;
+    }
+    WPP._renderParts('');
+  },
+
+  _selecionarGrupoParticipantes(grupoId) {
+    WPP._grupoSelecionado = grupoId;
+    WPP._selParts = [];
+    WPP._renderPessoaTab();
   },
 
   _renderParts(filtro='') {
     const el = $('dest-body'); if(!el) return;
+    const g = DB.grupos.list().find(x=>x.id===WPP._grupoSelecionado);
+    if (!g) { WPP._renderPessoaTab(); return; }
 
-    // Renderiza o shell (input + lista + volante pago) apenas uma vez — evita perda de foco
+    // Renderiza o shell (cabeçalho + input + lista + volante pago) apenas uma vez — evita perda de foco
     if (!document.getElementById('dest-parts-lista')) {
       el.innerHTML = `
+        <div class="fxb mb8">
+          <button class="btn btn-o btn-sm" onclick="WPP._grupoSelecionado=null;WPP._renderPessoaTab()">◀ Trocar grupo</button>
+          <div class="txs muted">${g.nome}</div>
+        </div>
         <input id="dest-parts-busca" class="fg" type="text" placeholder="🔍 Buscar participante..."
                style="margin-bottom:10px" oninput="WPP._renderParts(this.value)">
         <div id="dest-parts-lista" class="dest-lista"></div>
@@ -2440,112 +2469,30 @@ const WPP = {
         </label>`;
     }
 
-    // Atualiza só a lista (sem recriar o input)
-    const todos = WPP._getParticipantes();
+    // Atualiza só a lista (sem recriar o input, senão perde o foco a cada letra digitada)
+    const todos = DB.grupoMembros.list(g.id);
     const parts = todos.filter(p => !filtro || p.nome.toLowerCase().includes(filtro.toLowerCase()));
-    const gruposComJid = DB.grupos.list().filter(g=>g.jid);
 
     let listaHtml;
     if (!todos.length) {
-      // Nenhum participante cadastrado ainda
       listaHtml = `<div style="padding:16px;text-align:center">
-        <div class="muted mb8">Nenhum participante cadastrado.</div>
-        ${gruposComJid.length && BOT._status==='conectado'
-          ? `<button class="btn btn-p btn-sm" onclick="WPP._importarTodosGrupos()">
-               📱 Importar dos grupos WhatsApp
-             </button>`
-          : `<div class="txs muted">Adicione participantes em Admin → Apostadores.</div>`}
+        <div class="muted mb8">Nenhum apostador cadastrado neste grupo ainda.</div>
+        <button class="btn btn-p btn-sm" onclick="R._importarRosterAuto('${g.id}').then(()=>WPP._renderParts(''))">⬇️ Importar do WhatsApp</button>
       </div>`;
     } else if (!parts.length) {
       listaHtml = `<div class="muted tsm tc" style="padding:16px">Nenhum participante encontrado.</div>`;
     } else {
       listaHtml = parts.map(p=>`
-        <label class="dest-item ${p.pago?'part-pago':''}">
-          <input type="checkbox" ${WPP._selParts.find(x=>x.nome===p.nome)?'checked':''}
+        <label class="dest-item">
+          <input type="checkbox" ${WPP._selParts.find(x=>x.id===p.id)?'checked':''}
                  onchange="WPP._togglePart(${JSON.stringify(p).replace(/"/g,"'")},this.checked)">
           <div class="dest-info">
-            <div class="dest-nome">${p.nome} ${p.pago?'<span class="badge b-pago txs">Pago ✓</span>':''}</div>
-            <div class="dest-sub txs muted">${p.grupos.join(' · ')||'—'} ${p.fone?'· '+p.fone:''}</div>
+            <div class="dest-nome">${p.nome} ${p.wpp_jid?'<span title="Importado automaticamente">🤖</span>':''}</div>
+            <div class="dest-sub txs muted">${p.fone||'sem telefone — DM vai pelo WhatsApp (LID)'}</div>
           </div>
         </label>`).join('');
     }
     document.getElementById('dest-parts-lista').innerHTML = listaHtml;
-  },
-
-  async _importarTodosGrupos() {
-    const gs = DB.grupos.list().filter(g=>g.jid);
-    if (!gs.length) return;
-    MODAL.open(`<div class="m-title">📱 Buscando participantes...</div><div class="loading mt16"><div class="spinner"></div></div><p class="tc muted mt8">Consultando ${gs.length} grupo${gs.length>1?'s':''}...</p>`);
-
-    // Busca todos os grupos em paralelo
-    const resultados = await Promise.all(gs.map(async g => {
-      try {
-        const r = await fetch(API_URL+`/api/wpp/participantes/${encodeURIComponent(g.jid)}`);
-        const d = await r.json();
-        return d.ok ? { grupo: g.nome, parts: d.participantes } : { grupo: g.nome, erro: d.error };
-      } catch(e) { return { grupo: g.nome, erro: e.message }; }
-    }));
-
-    // Agrupa todos os participantes únicos — chave por jid, não por fone: participantes com
-    // número oculto pelo WhatsApp (foneOculto) têm fone='', então agrupar por fone colidiria
-    // todos eles na mesma chave vazia e a maioria desapareceria da lista.
-    const mapaFone = {};
-    resultados.forEach(res => {
-      if (res.erro) return;
-      res.parts.forEach(p => {
-        const chave = p.jid || p.fone;
-        if (!mapaFone[chave]) mapaFone[chave] = { fone: p.fone, foneOculto: !!p.foneOculto, grupos: [] };
-        if (!mapaFone[chave].grupos.includes(res.grupo)) mapaFone[chave].grupos.push(res.grupo);
-      });
-    });
-
-    WPP._pendingImport = Object.values(mapaFone);
-    const erros = resultados.filter(r=>r.erro);
-
-    if (!WPP._pendingImport.length) {
-      MODAL.open(`<div class="m-title">⚠️ Sem participantes</div>
-        <p class="tc muted">${erros.length ? 'Erro: '+erros.map(e=>e.grupo+': '+e.erro).join('<br>') : 'Nenhum participante encontrado nos grupos.'}</p>
-        <button class="btn btn-p btn-f mt12" onclick="MODAL.close()">Fechar</button>`);
-      return;
-    }
-
-    MODAL.open(`
-      <div class="m-title">📱 Participantes (${WPP._pendingImport.length})</div>
-      <p class="muted txs mb12">Preencha o nome de cada participante. Deixe em branco para pular.</p>
-      <div style="max-height:55vh;overflow-y:auto">
-        ${WPP._pendingImport.map((p,i)=>`
-          <div class="fr mb8" style="align-items:center;gap:8px">
-            <input type="checkbox" id="wpi-${i}" checked>
-            <div style="flex:1">
-              <input type="text" id="wpn-${i}" placeholder="Nome do participante"
-                     style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text);margin-bottom:4px">
-              <input type="tel" id="wpf-${i}" value="${p.foneOculto?'':p.fone}" placeholder="Telefone (opcional)"
-                     style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
-            </div>
-          </div>`).join('')}
-      </div>
-      ${erros.length ? `<div class="txs" style="color:var(--red);margin-top:8px">⚠️ Erro em: ${erros.map(e=>e.grupo).join(', ')}</div>` : ''}
-      <button class="btn btn-p btn-f mt12" onclick="WPP._salvarImportadosWPP()">✅ Cadastrar selecionados</button>
-      <button class="btn btn-o btn-f mt8" onclick="MODAL.close()">Cancelar</button>
-    `);
-  },
-
-  _salvarImportadosWPP() {
-    const todos = WPP._pendingImport || [];
-    let ok=0, dup=0;
-    todos.forEach((p,i) => {
-      if (!document.getElementById(`wpi-${i}`)?.checked) return;
-      const nome = document.getElementById(`wpn-${i}`)?.value?.trim();
-      if (!nome) return;
-      if (DB.usuarios.find(nome)) { dup++; return; }
-      const fone = document.getElementById(`wpf-${i}`)?.value?.trim()||'';
-      DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje(), fone });
-      ok++;
-    });
-    WPP._pendingImport = [];
-    MODAL.close();
-    alert(`${ok} participante${ok!==1?'s':''} cadastrado${ok!==1?'s':''}!${dup?` (${dup} já existia${dup!==1?'m':''})`:''}`);
-    WPP._renderParts('');
   },
 
   // ---- CADASTRO AUTOMÁTICO ----
@@ -2639,8 +2586,8 @@ const WPP = {
 
   _togglePart(p, on) {
     WPP._selParts = on
-      ? [...WPP._selParts.filter(x=>x.nome!==p.nome), p]
-      : WPP._selParts.filter(x=>x.nome!==p.nome);
+      ? [...WPP._selParts.filter(x=>x.id!==p.id), p]
+      : WPP._selParts.filter(x=>x.id!==p.id);
   },
 
   _copiarMsg(msg) {
@@ -2664,7 +2611,7 @@ const WPP = {
     if(WPP._dest==='todos') {
       const gs = DB.grupos.list().filter(g=>g.ativo);
       if(!gs.length){ alert('Nenhum grupo cadastrado.'); return; }
-      if(BOT._status==='conectado'){ WPP._enviarViaBot(gs); return; }
+      if(BOT._status==='conectado'){ WPP._enviarViaBot(gs, true); return; }
       WPP._grupos=gs; WPP._passo=0; WPP._step(); return;
     }
 
@@ -2674,16 +2621,17 @@ const WPP = {
         ? todos.filter(g=>WPP._selGrupos.includes(g.id))
         : todos;
       if(!gs.length){ alert('Selecione ao menos um grupo.'); return; }
-      if(BOT._status==='conectado'){ WPP._enviarViaBot(gs); return; }
+      if(BOT._status==='conectado'){ WPP._enviarViaBot(gs, false); return; }
       WPP._grupos=gs; WPP._passo=0; WPP._step(); return;
     }
 
-    // Envio por participante (sempre manual — mais pessoal)
+    // Envio por participante — DM automático via bot, usando wpp_jid (nunca exige telefone)
     if(!WPP._selParts.length){ alert('Selecione ao menos um participante.'); return; }
-    WPP._enviarPartes(0);
+    if(BOT._status!=='conectado'){ alert('Bot não conectado — conecte em Painel Dev → WhatsApp Bot pra mandar DM.'); return; }
+    WPP._enviarPartesBot();
   },
 
-  async _enviarViaBot(gs) {
+  async _enviarViaBot(gs, broadcast=false) {
     const semJid = gs.filter(g => !g.jid);
     const comJid = gs.filter(g =>  g.jid);
 
@@ -2697,15 +2645,16 @@ const WPP = {
       return;
     }
 
+    const segPorGrupo = broadcast ? 12 : 3; // broadcast usa delay maior (8-15s) contra bloqueio
     MODAL.open(`
       <div class="m-title">🤖 Enviando via Bot</div>
       <div class="loading mt16 mb8"><div class="spinner"></div></div>
       <p class="tc muted">Enviando para <strong>${comJid.length}</strong> grupo${comJid.length!==1?'s':''}...</p>
-      <p class="tc txs muted">Aguarde ~${comJid.length * 3}s (intervalo de segurança entre envios)</p>
+      <p class="tc txs muted">Aguarde ~${comJid.length * segPorGrupo}s (intervalo de segurança entre envios)</p>
       ${semJid.length ? `<div class="ia-aviso mt12">⚠️ ${semJid.length} grupo${semJid.length>1?'s':''} sem vínculo ignorados: ${semJid.map(g=>g.nome).join(', ')}</div>` : ''}
     `);
 
-    const res = await BOT.enviarGrupos(comJid, WPP._msg);
+    const res = await BOT.enviarGrupos(comJid, WPP._msg, broadcast);
 
     if (!res.ok) {
       MODAL.open(`
@@ -2729,36 +2678,39 @@ const WPP = {
     `);
   },
 
-  _enviarPartes(i) {
+  // DM automático via bot — usa wpp_jid quando existe (funciona mesmo com número oculto/LID);
+  // se o participante não tem wpp_jid (cadastro manual antigo), cai pro telefone normalizado.
+  // Nunca abre link manual do WhatsApp nem exige telefone: sem os dois, o participante é ignorado.
+  async _enviarPartesBot() {
     const parts = WPP._selParts;
-    if(i >= parts.length){ MODAL.close(); return; }
-    const p = parts[i];
-    const msg = WPP._volantePago ? WPP._msgPago(p.nome, p.grupos[0]) : WPP._msg;
-    const enc = encodeURIComponent(msg);
-    const foneNorm = normalizarFone(p.fone);
-    const link = foneNorm ? `https://wa.me/${foneNorm}?text=${enc}` : null;
-    const tc = S.cartela;
-    const pct = ((i/parts.length)*100).toFixed(0);
-
-    if(tc) setTimeout(()=>CARTELA.download(), 400);
+    const gNome = DB.grupos.list().find(g=>g.id===WPP._grupoSelecionado)?.nome || '';
+    const enviaveis = parts.filter(p=>p.wpp_jid || p.fone);
+    const semDestino = parts.filter(p=>!p.wpp_jid && !p.fone);
+    if(!enviaveis.length){ alert('Nenhum participante selecionado tem WhatsApp identificável.'); return; }
 
     MODAL.open(`
-      <div class="m-title">📤 Envio por participante</div>
-      <div class="pap-prog"><div class="pap-fill" style="width:${pct}%"></div></div>
-      <div class="pap-info">Participante ${i+1} de ${parts.length}</div>
-      <div class="pap-grp">${p.nome} ${p.pago?'<span class="badge b-pago">Pago ✓</span>':''}</div>
-      <div class="pap-membros txs muted mb16">${p.grupos.join(' · ')||'—'} ${p.fone?'· '+p.fone:''}</div>
-      ${tc?`<div class="ia-aviso mb12">⬇️ <strong>${tc.nome}</strong> baixado automaticamente — anexe no WhatsApp.</div>`:''}
-      ${link
-        ?`<a class="btn btn-g btn-f mb12" href="${link}" target="_blank" rel="noopener">${WPP_SVG(20)} Abrir conversa no WhatsApp</a>`
-        :`<div class="ia-aviso mb12">⚠️ Participante sem número cadastrado. Adicione o telefone no bolão.</div>`}
-      <div class="pap-msg-box mb16">${msg.replace(/\n/g,'<br>')}</div>
-      <div class="fx fxg8">
-        ${i>0?`<button class="btn btn-o" style="flex:1" onclick="WPP._enviarPartes(${i-1})">← Anterior</button>`:''}
-        <button class="btn btn-p" style="flex:1" onclick="WPP._enviarPartes(${i+1})">
-          ${i<parts.length-1?'Próximo →':'✅ Concluir'}
-        </button>
-      </div>`);
+      <div class="m-title">🤖 Enviando via Bot</div>
+      <div class="loading mt16 mb8"><div class="spinner"></div></div>
+      <p class="tc muted">Enviando para <strong>${enviaveis.length}</strong> participante${enviaveis.length!==1?'s':''}...</p>
+      ${semDestino.length?`<div class="ia-aviso mt12">⚠️ ${semDestino.length} sem WhatsApp identificável, ignorado${semDestino.length!==1?'s':''}: ${semDestino.map(p=>p.nome).join(', ')}</div>`:''}
+    `);
+
+    let ok=0, falha=0;
+    for (const p of enviaveis) {
+      const jid = p.wpp_jid || `${normalizarFone(p.fone)}@s.whatsapp.net`;
+      const msg = WPP._volantePago ? WPP._msgPago(p.nome, gNome) : WPP._msg;
+      const res = await BOT.enviarGrupos([{jid}], msg);
+      if (res.ok && res.resultados?.[0]?.ok) ok++; else falha++;
+    }
+    WPP._rotacionarFrase();
+
+    MODAL.open(`
+      <div class="m-title">✅ Envio Concluído!</div>
+      <div class="tc" style="font-size:2.8rem;margin:12px 0">🎉</div>
+      <p class="tc" style="font-size:1.1rem"><strong>${ok}</strong> participante${ok!==1?'s':''} recebeu${ok!==1?'ram':''} a mensagem</p>
+      ${falha?`<p class="tc muted txs mt4">${falha} falha${falha>1?'s':''} de envio</p>`:''}
+      <button class="btn btn-p btn-f mt16" onclick="MODAL.close()">Fechar</button>
+    `);
   },
 
   _step() {

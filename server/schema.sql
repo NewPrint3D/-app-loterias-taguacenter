@@ -29,8 +29,14 @@ CREATE TABLE IF NOT EXISTS grupo_membros (
   grupo_id TEXT REFERENCES grupos(id) ON DELETE CASCADE,
   nome     TEXT NOT NULL,
   fone     TEXT DEFAULT '',
+  wpp_jid  TEXT DEFAULT '',
+  ativo    BOOLEAN DEFAULT TRUE,
   criado   TEXT DEFAULT ''
 );
+-- Parcial: participante manual sem wpp_jid ('') pode coexistir várias vezes; só o MESMO wpp_jid
+-- real no MESMO grupo é duplicata de verdade.
+CREATE UNIQUE INDEX IF NOT EXISTS grupo_membros_grupo_wpp_jid_idx
+  ON grupo_membros(grupo_id, wpp_jid) WHERE wpp_jid <> '';
 
 CREATE TABLE IF NOT EXISTS membros (
   id       TEXT PRIMARY KEY,
