@@ -2364,7 +2364,7 @@ const WPP = {
               S.cache.boloes.filter(b=>bolaoDoGrupo(b,g)).forEach(b=>(b.membros||[]).forEach(m=>s.add(m.nome.trim().toLowerCase())));
               DB.grupoMembros.list(g.id).forEach(m=>{
                 const temNome = m.nome && m.nome.trim().toLowerCase()!=='sem nome';
-                s.add(temNome ? m.nome.trim().toLowerCase() : 'gm:'+m.id);
+                s.add(temNome ? m.nome.trim().toLowerCase() : (m.fone?'fone:'+m.fone:'gm:'+m.id));
               });
               const c=s.size||g.membros;
               return c+' apostador'+(c!==1?'es':'');
