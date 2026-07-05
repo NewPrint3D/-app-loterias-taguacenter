@@ -1230,8 +1230,8 @@ const R = {
     // Marca quem já está registrado no app
     DB.usuarios.list().forEach(u => {
       const k = u.nome.trim().toLowerCase();
-      if (mapa[k]) { mapa[k].noApp=true; mapa[k]._id=u.id; mapa[k].ativo=u.ativo; }
-      else mapa[k] = { nome:u.nome, fone:'', grupos:[], noApp:true, _id:u.id, ativo:u.ativo };
+      if (mapa[k]) { mapa[k].noApp=true; mapa[k]._id=u.id; mapa[k].ativo=u.ativo; if(!mapa[k].fone) mapa[k].fone=u.fone||''; }
+      else mapa[k] = { nome:u.nome, fone:u.fone||'', grupos:[], noApp:true, _id:u.id, ativo:u.ativo };
     });
 
     const todos = Object.values(mapa).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
@@ -1282,7 +1282,8 @@ const R = {
     const nome = $('mun')?.value?.trim();
     if (!nome) { alert('Informe o nome.'); return; }
     if (DB.usuarios.find(nome)) { alert('Já existe um usuário com esse nome.'); return; }
-    DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() });
+    const fone = $('mutel')?.value?.trim()||'';
+    DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje(), fone });
     MODAL.close(); R._usuarios();
   },
   _toggleUser(id) {
@@ -1297,16 +1298,16 @@ const R = {
   },
   _registrarNaApp(nome, fone) {
     if (DB.usuarios.find(nome)) { alert('Já registrado.'); return; }
-    DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() });
+    DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje(), fone:fone||'' });
     R._usuarios();
   },
   _registrarTodos() {
     const mapa = {};
-    S.cache.boloes.forEach(b => (b.membros||[]).forEach(m => { mapa[m.nome.trim().toLowerCase()] = m.nome; }));
-    const novos = Object.values(mapa).filter(n => !DB.usuarios.find(n));
+    S.cache.boloes.forEach(b => (b.membros||[]).forEach(m => { mapa[m.nome.trim().toLowerCase()] = { nome:m.nome, fone:m.fone||'' }; }));
+    const novos = Object.values(mapa).filter(n => !DB.usuarios.find(n.nome));
     if (!novos.length) { alert('Todos já estão registrados!'); return; }
     if (!confirm(`Registrar ${novos.length} apostador${novos.length>1?'es':''} no app?`)) return;
-    novos.forEach(nome => DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() }));
+    novos.forEach(n => DB.usuarios.save({ id:uid(), nome:n.nome, ativo:true, criado:hoje(), fone:n.fone }));
     R._usuarios();
   },
   async _importarWA(grupoId, jid) {
@@ -1330,10 +1331,10 @@ const R = {
               <input type="checkbox" id="pi-${i}" checked>
               <div style="flex:1">
                 <input type="text" id="pn-${i}" placeholder="Nome do apostador"
+                       style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text);margin-bottom:4px">
+                ${p.foneOculto?`<div class="txs" style="color:var(--gold);margin-bottom:4px">🔒 Número oculto pelo WhatsApp — preencha manualmente se souber</div>`:''}
+                <input type="tel" id="pf-${i}" value="${p.foneOculto?'':p.fone}" placeholder="Telefone (opcional)"
                        style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
-                ${p.foneOculto
-                  ? `<div class="txs" style="color:var(--gold)">🔒 Número oculto pelo WhatsApp</div>`
-                  : `<div class="txs muted">📱 +${p.fone}</div>`}
               </div>
             </div>`).join('')}
         </div>
@@ -1351,7 +1352,8 @@ const R = {
       const nome = document.getElementById(`pn-${i}`)?.value?.trim();
       if (!nome) return;
       if (DB.usuarios.find(nome)) { dup++; return; }
-      DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() });
+      const fone = document.getElementById(`pf-${i}`)?.value?.trim()||'';
+      DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje(), fone });
       ok++;
     });
     MODAL.close();
@@ -2301,13 +2303,16 @@ const WPP = {
       } catch(e) { return { grupo: g.nome, erro: e.message }; }
     }));
 
-    // Agrupa todos os participantes únicos (por fone)
+    // Agrupa todos os participantes únicos — chave por jid, não por fone: participantes com
+    // número oculto pelo WhatsApp (foneOculto) têm fone='', então agrupar por fone colidiria
+    // todos eles na mesma chave vazia e a maioria desapareceria da lista.
     const mapaFone = {};
     resultados.forEach(res => {
       if (res.erro) return;
       res.parts.forEach(p => {
-        if (!mapaFone[p.fone]) mapaFone[p.fone] = { fone: p.fone, grupos: [] };
-        if (!mapaFone[p.fone].grupos.includes(res.grupo)) mapaFone[p.fone].grupos.push(res.grupo);
+        const chave = p.jid || p.fone;
+        if (!mapaFone[chave]) mapaFone[chave] = { fone: p.fone, foneOculto: !!p.foneOculto, grupos: [] };
+        if (!mapaFone[chave].grupos.includes(res.grupo)) mapaFone[chave].grupos.push(res.grupo);
       });
     });
 
@@ -2321,17 +2326,21 @@ const WPP = {
       return;
     }
 
+    const qtdOcultos = WPP._pendingImport.filter(p=>p.foneOculto).length;
     MODAL.open(`
       <div class="m-title">📱 Participantes (${WPP._pendingImport.length})</div>
       <p class="muted txs mb12">Preencha o nome de cada participante. Deixe em branco para pular.</p>
+      ${qtdOcultos ? `<div class="ia-aviso mb12">🔒 ${qtdOcultos} participante${qtdOcultos!==1?'s tiveram':' teve'} o número escondido pelo WhatsApp (configuração de privacidade da pessoa) — nenhum app/bot recebe esse telefone nesse caso. Ainda dá pra importar só o nome, ou preencher o telefone manualmente.</div>` : ''}
       <div style="max-height:55vh;overflow-y:auto">
         ${WPP._pendingImport.map((p,i)=>`
           <div class="fr mb8" style="align-items:center;gap:8px">
             <input type="checkbox" id="wpi-${i}" checked>
             <div style="flex:1">
               <input type="text" id="wpn-${i}" placeholder="Nome do participante"
+                     style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text);margin-bottom:4px">
+              ${p.foneOculto?`<div class="txs" style="color:var(--gold);margin-bottom:4px">🔒 Número oculto pelo WhatsApp — preencha manualmente se souber</div>`:''}
+              <input type="tel" id="wpf-${i}" value="${p.foneOculto?'':p.fone}" placeholder="Telefone (opcional)"
                      style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
-              <div class="txs muted">📱 +${p.fone}</div>
             </div>
           </div>`).join('')}
       </div>
@@ -2349,7 +2358,8 @@ const WPP = {
       const nome = document.getElementById(`wpn-${i}`)?.value?.trim();
       if (!nome) return;
       if (DB.usuarios.find(nome)) { dup++; return; }
-      DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje() });
+      const fone = document.getElementById(`wpf-${i}`)?.value?.trim()||'';
+      DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje(), fone });
       ok++;
     });
     WPP._pendingImport = [];

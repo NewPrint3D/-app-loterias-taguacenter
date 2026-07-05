@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS usuarios (
   id     TEXT PRIMARY KEY,
   nome   TEXT NOT NULL,
   ativo  BOOLEAN DEFAULT TRUE,
-  criado TEXT DEFAULT ''
+  criado TEXT DEFAULT '',
+  fone   TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS config (

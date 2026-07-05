@@ -348,12 +348,12 @@ app.get('/api/usuarios', async (req, res) => {
 });
 
 app.post('/api/usuarios', async (req, res) => {
-  const { id, nome, ativo, criado } = req.body;
+  const { id, nome, ativo, criado, fone } = req.body;
   try {
     await pool.query(
-      `INSERT INTO usuarios(id,nome,ativo,criado) VALUES($1,$2,$3,$4)
-       ON CONFLICT(id) DO UPDATE SET nome=$2,ativo=$3`,
-      [id, nome, ativo!==false, criado||'']
+      `INSERT INTO usuarios(id,nome,ativo,criado,fone) VALUES($1,$2,$3,$4,$5)
+       ON CONFLICT(id) DO UPDATE SET nome=$2,ativo=$3,fone=$5`,
+      [id, nome, ativo!==false, criado||'', fone||'']
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -415,6 +415,9 @@ try { _pinoLog = require('pino')({ level: 'silent' }); } catch { _pinoLog = unde
 pool.query(`ALTER TABLE grupos ADD COLUMN IF NOT EXISTS jid TEXT DEFAULT ''`).catch(() => {});
 // Migração: WhatsApp do lotérico pra aviso instantâneo de resultado (antes de avisar os grupos)
 pool.query(`ALTER TABLE config ADD COLUMN IF NOT EXISTS admin_fone TEXT DEFAULT ''`).catch(() => {});
+// Migração: telefone do usuário (preenchido manualmente na importação — o WhatsApp não entrega
+// telefone de participantes com privacidade ativada, então o admin digita à mão quando descobre)
+pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fone TEXT DEFAULT ''`).catch(() => {});
 // Migração: vínculo de verdade bolão→grupo (antes só existia bolões.grupo como texto livre,
 // que ficava "órfão" quando o grupo era apagado ou renomeado). ON DELETE SET NULL: apagar um
 // grupo não apaga os bolões vinculados, só desfaz o vínculo (o campo texto `grupo` continua
