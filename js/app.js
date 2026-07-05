@@ -186,6 +186,15 @@ async function carregarDados() {
   if (ctrl && ctrl.id)         S.cache.ctrl     = ctrl;
 }
 
+// Um bolão pertence a um grupo só se o grupo_id bater (vínculo de verdade).
+// Sem fallback por nome de propósito: se um grupo for apagado e outro recriado com o MESMO
+// nome depois, comparar por texto reassociaria por engano um bolão órfão ao grupo novo e
+// não-relacionado — exatamente o tipo de vínculo falso que essa coluna existe pra evitar.
+// Bolões legados sem grupo_id (de antes dessa migração) foram corrigidos manualmente uma vez.
+function bolaoDoGrupo(b, g) {
+  return !!b.grupo_id && b.grupo_id === g.id;
+}
+
 // =============================================
 // DB (cache em memória + API)
 // =============================================
@@ -1336,7 +1345,7 @@ const R = {
   },
   _mImportarColar(grupoId, textoPrevio, bolaoIdPrevio) {
     const g = DB.grupos.list().find(x=>x.id===grupoId); if (!g) return;
-    const boloes = DB.boloes.list().filter(b=>b.grupo===g.nome);
+    const boloes = DB.boloes.list().filter(b=>bolaoDoGrupo(b,g));
     if (!boloes.length) {
       MODAL.open(`<div class="m-title">📋 Importar membros</div>
         <p class="muted txs">Nenhum bolão cadastrado para o grupo <strong>${g.nome}</strong>. Crie um bolão vinculado a este grupo primeiro.</p>
@@ -1433,7 +1442,7 @@ const R = {
       <div id="lista-grp">
         ${gs.length?gs.map(g=>{
           const ns=new Set();
-          S.cache.boloes.filter(b=>b.grupo===g.nome).forEach(b=>(b.membros||[]).forEach(m=>ns.add(m.nome.trim().toLowerCase())));
+          S.cache.boloes.filter(b=>bolaoDoGrupo(b,g)).forEach(b=>(b.membros||[]).forEach(m=>ns.add(m.nome.trim().toLowerCase())));
           const cnt = ns.size || g.membros;
           return `
           <div class="grp-card">
@@ -1558,7 +1567,15 @@ const R = {
     DB.grupos.save({id,nome,link:$('mgl').value.trim(),membros:parseInt($('mgm').value)||0,ativo:true});
     MODAL.close(); R._whatsapp();
   },
-  _delGrp(id){if(!confirm('Remover grupo?'))return; DB.grupos.del(id); R._whatsapp();},
+  _delGrp(id){
+    const g = DB.grupos.list().find(x=>x.id===id); if(!g) return;
+    const vinculados = DB.boloes.list().filter(b=>bolaoDoGrupo(b,g));
+    const aviso = vinculados.length
+      ? `Este grupo tem ${vinculados.length} bolão${vinculados.length!==1?'ões':''} vinculado${vinculados.length!==1?'s':''}: ${vinculados.map(b=>b.nome).join(', ')}.\n\nOs bolões continuam existindo, mas perdem o vínculo com o grupo. Remover mesmo assim?`
+      : 'Remover grupo?';
+    if(!confirm(aviso))return;
+    DB.grupos.del(id); R._whatsapp();
+  },
 
   // ---- STATS ----
   _stats() {
@@ -1790,7 +1807,8 @@ const R = {
       <div class="fg"><label>Nome do bolão</label><input id="mbn" type="text" placeholder="Bolão do Escritório"></div>
       <div class="fg"><label>Grupo WhatsApp</label>
         <select id="mbg"><option value="">Selecionar...</option>
-        ${DB.grupos.list().map(g=>`<option value="${g.nome}">${g.nome}</option>`).join('')}</select>
+        ${DB.grupos.list().map(g=>`<option value="${g.id}">${g.nome}</option>`).join('')}</select>
+        ${!DB.grupos.list().length?'<div class="txs muted mt4">Nenhum grupo cadastrado ainda — cadastre um em Admin → WhatsApp antes, ou crie o bolão sem grupo por enquanto.</div>':''}
       </div>
       <div class="fr">
         <div class="fg"><label>Nº do concurso</label><input id="mbc" type="number" placeholder="2780"></div>
@@ -1803,7 +1821,9 @@ const R = {
   _saveBolao() {
     const nome=$('mbn')?.value?.trim(); if(!nome){alert('Informe o nome.');return;}
     const nums=($('mbnum')?.value?.trim()||'').split(',').map(n=>n.trim().padStart(2,'0')).filter(Boolean);
-    DB.boloes.save({id:uid(),loteria:S.loteria,nome,grupo:$('mbg')?.value||'',
+    const grupoId=$('mbg')?.value||null;
+    const grupoNome=grupoId?(DB.grupos.list().find(g=>g.id===grupoId)?.nome||''):'';
+    DB.boloes.save({id:uid(),loteria:S.loteria,nome,grupo:grupoNome,grupo_id:grupoId,
       cotas_total:parseInt($('mbq')?.value)||10,valor_cota:parseFloat($('mbv')?.value)||0,
       concurso:parseInt($('mbc')?.value)||0,status:'ativo',membros:[],
       numeros:nums.length?[nums]:[],criado:hoje()});
@@ -2126,7 +2146,7 @@ const WPP = {
                  onchange="WPP._toggleGrupo('${g.id}',this.checked)">
           <div class="dest-info">
             <div class="dest-nome">${g.nome}</div>
-            <div class="dest-sub txs muted">${(()=>{const s=new Set();S.cache.boloes.filter(b=>b.grupo===g.nome).forEach(b=>(b.membros||[]).forEach(m=>s.add(m.nome.trim().toLowerCase())));const c=s.size||g.membros;return c+' apostador'+(c!==1?'es':'');})()}</div>
+            <div class="dest-sub txs muted">${(()=>{const s=new Set();S.cache.boloes.filter(b=>bolaoDoGrupo(b,g)).forEach(b=>(b.membros||[]).forEach(m=>s.add(m.nome.trim().toLowerCase())));const c=s.size||g.membros;return c+' apostador'+(c!==1?'es':'');})()}</div>
           </div>
         </label>`).join('')}</div>`;
 

@@ -248,15 +248,15 @@ app.get('/api/boloes', async (req, res) => {
 });
 
 app.post('/api/boloes', async (req, res) => {
-  const { id, loteria, nome, grupo, cotas_total, valor_cota, concurso, status, numeros, criado, membros } = req.body;
+  const { id, loteria, nome, grupo, grupo_id, cotas_total, valor_cota, concurso, status, numeros, criado, membros } = req.body;
   try {
     await pool.query(
-      `INSERT INTO boloes(id,loteria,nome,grupo,cotas_total,valor_cota,concurso,status,numeros,criado)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT(id) DO UPDATE SET loteria=$2,nome=$3,grupo=$4,cotas_total=$5,valor_cota=$6,concurso=$7,
-         status=CASE WHEN boloes.status='conferido' AND $8='ativo' THEN boloes.status ELSE $8 END,
-         numeros=$9,criado=$10`,
-      [id, loteria, nome, grupo||'', cotas_total||10, valor_cota||0, concurso||0, status||'ativo', JSON.stringify(numeros||[]), criado||'']
+      `INSERT INTO boloes(id,loteria,nome,grupo,grupo_id,cotas_total,valor_cota,concurso,status,numeros,criado)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT(id) DO UPDATE SET loteria=$2,nome=$3,grupo=$4,grupo_id=$5,cotas_total=$6,valor_cota=$7,concurso=$8,
+         status=CASE WHEN boloes.status='conferido' AND $9='ativo' THEN boloes.status ELSE $9 END,
+         numeros=$10,criado=$11`,
+      [id, loteria, nome, grupo||'', grupo_id||null, cotas_total||10, valor_cota||0, concurso||0, status||'ativo', JSON.stringify(numeros||[]), criado||'']
     );
     if (Array.isArray(membros)) {
       await pool.query('DELETE FROM membros WHERE bolao_id=$1', [id]);
@@ -408,6 +408,17 @@ try { _pinoLog = require('pino')({ level: 'silent' }); } catch { _pinoLog = unde
 pool.query(`ALTER TABLE grupos ADD COLUMN IF NOT EXISTS jid TEXT DEFAULT ''`).catch(() => {});
 // Migração: WhatsApp do lotérico pra aviso instantâneo de resultado (antes de avisar os grupos)
 pool.query(`ALTER TABLE config ADD COLUMN IF NOT EXISTS admin_fone TEXT DEFAULT ''`).catch(() => {});
+// Migração: vínculo de verdade bolão→grupo (antes só existia bolões.grupo como texto livre,
+// que ficava "órfão" quando o grupo era apagado ou renomeado). ON DELETE SET NULL: apagar um
+// grupo não apaga os bolões vinculados, só desfaz o vínculo (o campo texto `grupo` continua
+// mostrando o nome histórico).
+// Diferente das outras migrações fire-and-forget acima: POST /api/boloes referencia grupo_id
+// incondicionalmente em TODO INSERT/UPDATE de bolão (não só nos vinculados a grupo), então o
+// servidor aguarda essa terminar antes de aceitar conexões (ver app.listen no fim do arquivo) —
+// sem isso, uma requisição podendo chegar antes da coluna existir quebraria a criação de
+// qualquer bolão com "column grupo_id does not exist".
+const _migracaoGrupoId = pool.query(`ALTER TABLE boloes ADD COLUMN IF NOT EXISTS grupo_id TEXT REFERENCES grupos(id) ON DELETE SET NULL`)
+  .catch(e => console.error('Migração crítica (grupo_id) falhou — criação de bolões pode quebrar:', e.message));
 
 // Tabelas persistentes
 pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`).catch(() => {});
@@ -1060,4 +1071,8 @@ app.post('/api/resultados/relay', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));
+// Só aceita conexões depois que a migração crítica (grupo_id) terminar — elimina a janela onde
+// uma requisição POST /api/boloes podia chegar antes da coluna existir de verdade no banco.
+_migracaoGrupoId.finally(() => {
+  app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));
+});

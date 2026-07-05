@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS boloes (
   loteria     TEXT NOT NULL,
   nome        TEXT NOT NULL,
   grupo       TEXT DEFAULT '',
+  grupo_id    TEXT REFERENCES grupos(id) ON DELETE SET NULL,
   cotas_total INTEGER DEFAULT 10,
   valor_cota  NUMERIC DEFAULT 0,
   concurso    INTEGER DEFAULT 0,
