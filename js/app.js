@@ -634,13 +634,17 @@ const R = {
       </div>
       <div class="grid-lt">
         ${Object.values(LOTERIAS).map(lt=>{
-          const cnt=bs.filter(b=>b.loteria===lt.id&&b.status==='ativo').length;
+          // Total de bolões da loteria (qualquer status) — antes só contava status='ativo', o que
+          // fazia bolões já conferidos "sumirem" da home mesmo continuando a existir de verdade.
+          const todos=bs.filter(b=>b.loteria===lt.id);
+          const aguardando=todos.filter(b=>b.status==='ativo'||b.status==='aguardando_resultado').length;
+          const cnt=todos.length;
           return`<div class="lt-card" style="background:linear-gradient(135deg,${lt.cor},${lt.cor2})" onclick="R._ltClick('${lt.id}')">
             <span class="lt-emoji">${lt.emoji}</span>
             <div id="ld-${lt.id}" class="lt-dados-live"><div class="lt-loading-dot"></div></div>
             <div class="lt-nome">${lt.nome}</div>
             <div class="lt-dias">${lt.dias}</div>
-            <div class="lt-cnt">${cnt} ${cnt!==1?'bolões':'bolão'} ativo${cnt!==1?'s':''}</div>
+            <div class="lt-cnt">${cnt} ${cnt!==1?'bolões':'bolão'}${aguardando?` · ${aguardando} aguardando resultado`:''}</div>
           </div>`;
         }).join('')}
       </div>`;
@@ -941,7 +945,7 @@ const R = {
       <div><div style="font-weight:700">${lt.nome}</div><div class="muted txs">${lt.dias} · R$ ${lt.preco.toFixed(2)}/jogo</div></div>
       ${admin?`<button class="btn btn-p btn-sm" style="margin-left:auto" onclick="R._mNovoBolao()">+ Novo</button>`:''}
     </div>`;
-    if(!bs.length){h+=`<div class="empty"><div class="ei">${lt.emoji}</div><p>Nenhum bolão ativo.</p></div>`;}
+    if(!bs.length){h+=`<div class="empty"><div class="ei">${lt.emoji}</div><p>Nenhum bolão cadastrado.</p></div>`;}
     else h+=bs.map(b=>{
       const pg=b.membros.filter(m=>m.pago).length;
       return`<div class="card cc" style="border-left:4px solid ${lt.cor};position:relative" onclick="R._bClick('${b.id}')">
@@ -1136,7 +1140,11 @@ const R = {
     const vs=DB.vendas.list(), bs=DB.boloes.list();
     const tot=vs.reduce((s,v)=>s+(v.valor||0),0);
     const tm=vs.length?tot/vs.length:0;
-    const aps=new Set(vs.map(v=>v.membro)).size;
+    // Apostadores = membros únicos dos bolões ATUAIS (não o histórico de vendas, que pode ter
+    // nomes de bolões já apagados e ficar "descolado" do que existe hoje de verdade).
+    const apostadoresUnicos=new Set();
+    bs.forEach(b=>(b.membros||[]).forEach(m=>apostadoresUnicos.add(m.nome.trim().toLowerCase())));
+    const aps=apostadoresUnicos.size;
     const isdev=S.user.role==='dev';
     const qtUsr=DB.usuarios.list().length;
     $('view-admin').innerHTML=`
