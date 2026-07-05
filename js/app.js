@@ -1336,6 +1336,7 @@ const R = {
       <div class="stat-row">
         <div class="stat-card"><div class="sv">${fmt$(tot)}</div><div class="sl">Total Vendido</div></div>
         <div class="stat-card"><div class="sv">${bs.length}</div><div class="sl">Bolões</div></div>
+        <div class="stat-card"><div class="sv">${DB.grupos.list().length}</div><div class="sl">Grupos</div></div>
         <div class="stat-card"><div class="sv">${aps}</div><div class="sl">Apostadores</div></div>
         <div class="stat-card"><div class="sv">${fmt$(tm)}</div><div class="sl">Ticket Médio</div></div>
       </div>
