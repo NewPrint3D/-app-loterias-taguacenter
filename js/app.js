@@ -1318,7 +1318,18 @@ const R = {
       const chave = temNomeReal ? m.nome.trim().toLowerCase() : (m.fone ? 'fone:'+m.fone : 'gm:'+m.id);
       apostadoresUnicos.add(chave);
     });
-    const aps=apostadoresUnicos.size;
+    // Grupo sem NENHUM cadastro individual ainda (nem bolão, nem "Apostadores do grupo") — soma
+    // a estimativa que o lotérico já digitou em "Nº de membros" ao cadastrar o grupo, senão o
+    // total fica menor do que ele sabe que é na prática. Assim que alguém cadastrar os nomes/
+    // telefones de verdade, essa estimativa é substituída automaticamente pela contagem real
+    // (o grupo passa a ter `temIndividual`, e para de somar aqui).
+    let estimativaSemCadastro=0;
+    DB.grupos.list().forEach(g=>{
+      const temIndividual = DB.grupoMembros.list(g.id).length>0
+        || bs.some(b=>bolaoDoGrupo(b,g) && (b.membros||[]).length>0);
+      if (!temIndividual) estimativaSemCadastro += (g.membros||0);
+    });
+    const aps=apostadoresUnicos.size + estimativaSemCadastro;
     const isdev=S.user.role==='dev';
     const qtUsr=DB.usuarios.list().length;
     $('view-admin').innerHTML=`
