@@ -31,7 +31,7 @@ function normalizarFoneServidor(raw) {
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 // =============================================
-// JWT — expira em 1h sem uso, com renovação deslizante
+// JWT — expira em 24h sem uso, com renovação deslizante
 // =============================================
 // JWT_SECRET vem de env var no Render. Fallback fixo só pra não travar o dev local
 // (não regenerar aleatório aqui — isso invalidaria todas as sessões a cada restart do servidor).
@@ -39,7 +39,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'apploterias-taguacenter-dev-secret
 if (!process.env.JWT_SECRET) {
   console.warn('⚠️  JWT_SECRET não definido — usando fallback fixo. Configure a env var no Render (senão qualquer um que veja este código pode forjar tokens de admin).');
 }
-const JWT_EXPIRES_IN = '1h';
+const JWT_EXPIRES_IN = '24h';
 const assinarToken = role => jwt.sign({ role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
 // Rotas de escrita usadas por quem não tem login (cliente sem senha) — ficam de fora do gate.
