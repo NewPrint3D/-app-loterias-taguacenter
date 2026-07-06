@@ -500,7 +500,7 @@ pool.query(`CREATE TABLE IF NOT EXISTS wpp_cadastros (
 
 async function pgAuthState() {
   await pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`);
-  const { BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
+  const { BufferJSON, initAuthCreds } = await import('@whiskeysockets/baileys'); // v7 é ESM puro, sem require()
 
   const read = async key => {
     const r = await pool.query('SELECT valor FROM wpp_auth WHERE chave=$1', [key]);
@@ -544,7 +544,7 @@ async function conectarBot() {
       DisconnectReason,
       fetchLatestBaileysVersion,
       makeCacheableSignalKeyStore,
-    } = require('@whiskeysockets/baileys');
+    } = await import('@whiskeysockets/baileys'); // v7 é ESM puro, sem require()
     const QR = require('qrcode');
 
     botStatus = 'conectando';
@@ -575,28 +575,40 @@ async function conectarBot() {
           const groupJid = msg.key.remoteJid;
           if (!groupJid?.endsWith('@g.us')) continue; // só grupos
           const senderJid = msg.key.participant || groupJid;
+          // Lazy + memoizado: só resolve o telefone (pode envolver lidMapping, mais caro) se
+          // algum dos dois blocos abaixo (pushName/participantAlt OU cadastro automático) de fato
+          // precisar, e no máximo uma vez por mensagem mesmo se os dois precisarem.
+          let _foneRemetente = null;
+          const obterFoneRemetente = async () => {
+            if (_foneRemetente === null) _foneRemetente = await resolverFoneDoJid(senderJid, msg.key.participantAlt);
+            return _foneRemetente;
+          };
 
-          // ---- Atualiza/cria o participante em grupo_membros a partir do pushName ----
-          // Baileys só expõe o nome de exibição (pushName) quando a pessoa manda mensagem —
-          // groupMetadata (importação inicial) não devolve nome nenhum. Só sobrescreve nome
-          // vazio/"Sem nome" — preserva uma correção manual feita pelo admin depois.
-          if (msg.pushName) {
+          // ---- Atualiza/cria o participante em grupo_membros a partir de pushName/participantAlt ----
+          // groupMetadata (importação inicial) raramente devolve nome — pushName só chega quando a
+          // pessoa manda mensagem. `participantAlt` (v7) é o JID em formato telefone quando quem
+          // mandou a mensagem é identificado por LID — o Baileys já resolve isso na entrega,
+          // então é uma fonte de telefone melhor (e mais barata) que chamar lidMapping toda hora.
+          if (msg.pushName || msg.key.participantAlt) {
             try {
               const { rows: gRows } = await pool.query('SELECT id FROM grupos WHERE jid=$1', [groupJid]);
               if (gRows.length) {
                 const grupoId = gRows[0].id;
-                const oculto = senderJid.endsWith('@lid');
-                const foneAuto = oculto ? '' : senderJid.replace('@s.whatsapp.net','').replace(/\D/g,'');
+                const fone = await obterFoneRemetente();
+                const temPushName = !!msg.pushName;
                 // ON CONFLICT resolve inserir-ou-atualizar num só comando atômico (evita corrida
                 // com a importação/entrada no grupo tentando cadastrar a mesma pessoa junto).
-                // Só sobrescreve nome vazio/"Sem nome" — preserva uma correção manual do admin.
+                // `$7` (temPushName) trava a troca de nome pra só acontecer quando este evento tem
+                // pushName de verdade — sem isso, um evento disparado só por participantAlt (sem
+                // pushName) sobrescreveria um nome já capturado de volta pra "Sem nome".
                 await pool.query(
                   `INSERT INTO grupo_membros(id,grupo_id,nome,fone,wpp_jid,ativo,criado) VALUES($1,$2,$3,$4,$5,true,$6)
                    ON CONFLICT (grupo_id,wpp_jid) WHERE wpp_jid <> '' DO UPDATE SET
                      ativo=true,
-                     nome = CASE WHEN grupo_membros.nome='' OR LOWER(grupo_membros.nome)='sem nome'
+                     fone = CASE WHEN grupo_membros.fone='' THEN EXCLUDED.fone ELSE grupo_membros.fone END,
+                     nome = CASE WHEN $7 AND (grupo_membros.nome='' OR LOWER(grupo_membros.nome)='sem nome' OR grupo_membros.nome <> EXCLUDED.nome)
                                  THEN EXCLUDED.nome ELSE grupo_membros.nome END`,
-                  [crypto.randomUUID(), grupoId, msg.pushName, foneAuto, senderJid, new Date().toISOString().split('T')[0]]
+                  [crypto.randomUUID(), grupoId, msg.pushName||'Sem nome', fone, senderJid, new Date().toISOString().split('T')[0], temPushName]
                 );
               }
             } catch (e) { console.error('Erro ao atualizar participante via pushName:', e.message); }
@@ -620,7 +632,7 @@ async function conectarBot() {
 
           // Valida que parece um nome (letras, acentos, espaços — 3 a 60 chars)
           const eNome = /^[a-zA-ZÀ-ÿ\s]{3,60}$/.test(texto);
-          const fone = senderJid.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+          const fone = await obterFoneRemetente();
 
           if (!eNome) {
             await botSock.sendMessage(groupJid, {
@@ -648,8 +660,8 @@ async function conectarBot() {
           const novoId = crypto.randomUUID();
           const hoje = new Date().toISOString().split('T')[0];
           await pool.query(
-            `INSERT INTO usuarios(id, nome, ativo, criado) VALUES($1,$2,true,$3)`,
-            [novoId, nome, hoje]
+            `INSERT INTO usuarios(id, nome, ativo, criado, fone) VALUES($1,$2,true,$3,$4)`,
+            [novoId, nome, hoje, fone]
           );
 
           await botSock.sendMessage(groupJid, {
@@ -670,20 +682,37 @@ async function conectarBot() {
         if (!gRows.length) return; // grupo não vinculado a nenhum grupo do app
         const grupoId = gRows[0].id;
         const hoje = new Date().toISOString().split('T')[0];
-        for (const jid of participants) {
+        // v7: participants é GroupParticipant[] (objetos Contact), não mais array de JID string
+        for (const p of participants) {
           if (action === 'add') {
-            const oculto = jid.endsWith('@lid');
-            const fone = oculto ? '' : jid.replace('@s.whatsapp.net','').replace(/\D/g,'');
+            const { wppJid, fone, nome } = await extrairInfoParticipante(p);
             await pool.query(
-              `INSERT INTO grupo_membros(id,grupo_id,nome,fone,wpp_jid,ativo,criado) VALUES($1,$2,'Sem nome',$3,$4,true,$5)
+              `INSERT INTO grupo_membros(id,grupo_id,nome,fone,wpp_jid,ativo,criado) VALUES($1,$2,$3,$4,$5,true,$6)
                ON CONFLICT (grupo_id,wpp_jid) WHERE wpp_jid <> '' DO UPDATE SET ativo=true`,
-              [crypto.randomUUID(), grupoId, fone, jid, hoje]
+              [crypto.randomUUID(), grupoId, nome||'Sem nome', fone, wppJid, hoje]
             );
           } else if (action === 'remove') {
-            await pool.query('UPDATE grupo_membros SET ativo=false WHERE grupo_id=$1 AND wpp_jid=$2', [grupoId, jid]);
+            await pool.query('UPDATE grupo_membros SET ativo=false WHERE grupo_id=$1 AND wpp_jid=$2', [grupoId, p.id]);
           }
         }
       } catch (e) { console.error('Erro no listener group-participants.update:', e.message); }
+    });
+
+    // ---- LISTENER: sincronização de contatos (nome/telefone), independente de grupo ----
+    // Diferente de messages.upsert (ligado a UM grupo específico), contatos são globais — um
+    // mesmo contato pode aparecer em vários grupos vinculados, então atualiza por wpp_jid em
+    // qualquer linha que bater (id, lid ou telefone), não só na de um grupo.
+    botSock.ev.on('contacts.upsert', async contatos => {
+      for (const c of contatos) await atualizarContatoGrupoMembros(c);
+    });
+    botSock.ev.on('contacts.update', async contatos => {
+      for (const c of contatos) await atualizarContatoGrupoMembros(c);
+    });
+    // Ao conectar/reconectar, o Baileys entrega um lote de contatos já conhecidos (nome salvo,
+    // notify, telefone) via este evento — mesma função de sempre, só chega numa hora diferente
+    // (conexão) em vez de incremental (contacts.upsert/update).
+    botSock.ev.on('messaging-history.set', async ({ contacts }) => {
+      for (const c of (contacts || [])) await atualizarContatoGrupoMembros(c);
     });
 
     botSock.ev.on('connection.update', async upd => {
@@ -699,7 +728,7 @@ async function conectarBot() {
         console.log('Bot WhatsApp conectado!');
       }
       if (connection === 'close') {
-        const { DisconnectReason: DR } = require('@whiskeysockets/baileys');
+        const { DisconnectReason: DR } = await import('@whiskeysockets/baileys');
         const cod = lastDisconnect?.error?.output?.statusCode;
         botSock = null; botStatus = 'desconectado'; botQr = null;
         if (cod !== DR.loggedOut) {
@@ -764,31 +793,80 @@ app.post('/api/wpp/desconectar', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Resolve o telefone real (só dígitos) a partir de um JID do WhatsApp — usado em todo lugar que
+// precisa de telefone (participante de grupo, remetente de mensagem, cadastro automático).
+// Ordem: 1) `pnAlternativo` explícito, se já vier em formato de telefone (ex: `p.phoneNumber` do
+// groupMetadata, `msg.key.participantAlt` de uma mensagem); 2) o próprio `jid`, se já for
+// `@s.whatsapp.net`; 3) só então tenta `signalRepository.lidMapping.getPNForLID` (mais caro, só
+// funciona se o bot já tiver alguma sessão/troca de chave com essa pessoa — não é garantido).
+async function resolverFoneDoJid(jid, pnAlternativo) {
+  let pn = '';
+  if (pnAlternativo && String(pnAlternativo).includes('@s.whatsapp.net')) pn = String(pnAlternativo);
+  if (!pn && jid && jid.endsWith('@s.whatsapp.net')) pn = jid;
+  if (!pn && jid && jid.endsWith('@lid') && botSock?.signalRepository?.lidMapping?.getPNForLID) {
+    try { pn = await botSock.signalRepository.lidMapping.getPNForLID(jid) || ''; }
+    catch { /* sem sessão conhecida pra esse LID ainda — segue sem telefone */ }
+  }
+  return pn ? pn.replace('@s.whatsapp.net', '').replace(/\D/g, '') : '';
+}
+
+// Extrai identidade/telefone/nome de um participante (v7: GroupParticipant = Contact & flags de
+// admin). O WhatsApp pode expor o número real via `phoneNumber` (contato não-oculto).
+async function extrairInfoParticipante(p) {
+  const wppJid = p.id;
+  const fone = await resolverFoneDoJid(wppJid, p.phoneNumber);
+  const nome = p.name || p.notify || p.verifiedName || '';
+  return { wppJid, fone, nome };
+}
+
+// Atualiza nome/telefone em qualquer linha de grupo_membros cujo wpp_jid bata com este contato
+// (id, lid, ou o telefone real quando exposto) — usado pelos listeners contacts.upsert/update.
+// Mesma regra de sempre: nunca sobrescreve nome/telefone já preenchidos com um valor pior/vazio.
+async function atualizarContatoGrupoMembros(c) {
+  try {
+    const foneJid = c.phoneNumber;
+    const candidatos = [c.id, c.lid, foneJid].filter(Boolean);
+    if (!candidatos.length) return;
+    const nome = c.name || c.notify || c.verifiedName || '';
+    const fone = foneJid ? foneJid.replace('@s.whatsapp.net', '').replace(/\D/g, '') : '';
+    if (!nome && !fone) return; // contato sem nada de novo pra oferecer
+    await pool.query(
+      `UPDATE grupo_membros SET
+         nome = CASE WHEN $2 <> '' AND (nome='' OR LOWER(nome)='sem nome' OR nome <> $2) THEN $2 ELSE nome END,
+         fone = CASE WHEN fone='' AND $3 <> '' THEN $3 ELSE fone END
+       WHERE wpp_jid = ANY($1)`,
+      [candidatos, nome, fone]
+    );
+  } catch (e) { console.error('Erro ao sincronizar contato em grupo_membros:', e.message); }
+}
+
 // Importa/atualiza todos os participantes de um grupo WhatsApp em grupo_membros — chamado ao
-// vincular um grupo do app a um wpp_jid (PUT /api/grupos/:id/jid) e pelo botão manual "⬇️
-// Importar". Baileys não expõe o nome de exibição (pushName) via groupMetadata — só aparece
-// quando a pessoa manda mensagem (ver listener messages.upsert abaixo) — então participante novo
-// entra como "Sem nome" até falar pela primeira vez. Participante que já existia (mesmo wpp_jid)
-// só é reativado (ativo=true), nunca tem o nome sobrescrito — preserva edição manual ou pushName
-// já capturado.
+// vincular um grupo do app a um wpp_jid (PUT /api/grupos/:id/jid), pelo botão manual "⬇️
+// Importar" e pelo cron de backfill (a cada 6h, reforça resolução de LID/nome pendentes).
+// Participante sem nome/telefone expostos entra como "Sem nome" até falar no grupo (pushName,
+// ver messages.upsert) ou até o backfill conseguir resolver. Nunca sobrescreve nome/telefone já
+// preenchidos (edição manual ou captura anterior) com um valor pior/vazio.
 async function importarParticipantesGrupo(grupoId, wppJid) {
   if (!botSock || botStatus !== 'conectado') throw new Error('Bot não conectado.');
   const meta = await botSock.groupMetadata(wppJid);
   const hoje = new Date().toISOString().split('T')[0];
   let novos = 0;
   for (const p of meta.participants) {
-    const oculto = p.id.endsWith('@lid');
-    const fone = oculto ? '' : p.id.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+    const { wppJid: jid, fone, nome } = await extrairInfoParticipante(p);
     // ON CONFLICT (índice único parcial grupo_id+wpp_jid) resolve inserir-ou-reativar num só
     // comando atômico — sem essa garantia, dois processos tentando cadastrar o mesmo participante
     // quase ao mesmo tempo (esta importação e os listeners do bot) podiam criar linha duplicada.
     // `xmax=0` no RETURNING diz se a linha foi inserida agora (não conta reativação como "novo").
     const { rows } = await pool.query(
       `INSERT INTO grupo_membros(id,grupo_id,nome,fone,wpp_jid,ativo,criado)
-       VALUES($1,$2,'Sem nome',$3,$4,true,$5)
-       ON CONFLICT (grupo_id,wpp_jid) WHERE wpp_jid <> '' DO UPDATE SET ativo=true
+       VALUES($1,$2,$3,$4,$5,true,$6)
+       ON CONFLICT (grupo_id,wpp_jid) WHERE wpp_jid <> '' DO UPDATE SET
+         ativo=true,
+         fone = CASE WHEN grupo_membros.fone='' THEN EXCLUDED.fone ELSE grupo_membros.fone END,
+         nome = CASE WHEN grupo_membros.nome='' OR LOWER(grupo_membros.nome)='sem nome'
+                     THEN EXCLUDED.nome ELSE grupo_membros.nome END
        RETURNING (xmax = 0) AS inserted`,
-      [crypto.randomUUID(), grupoId, fone, p.id, hoje]
+      [crypto.randomUUID(), grupoId, nome||'Sem nome', fone, jid, hoje]
     );
     if (rows[0]?.inserted) novos++;
   }
@@ -1217,6 +1295,29 @@ async function conferirBoloes() {
 // Todo dia às 21h e 22h (horário de Brasília)
 cron.schedule('0 21 * * *', conferirBoloes, { timezone: 'America/Sao_Paulo' });
 cron.schedule('0 22 * * *', conferirBoloes, { timezone: 'America/Sao_Paulo' });
+
+// ---- BACKFILL: reforça resolução de LID→telefone e nomes pendentes dos grupos vinculados ----
+// Reimportar é seguro/idempotente (ON CONFLICT reativa e só melhora fone/nome quando ainda
+// estavam vazios/placeholder) — então a cada 6h só roda de novo o mesmo caminho da importação
+// manual, dando outra chance pro lidMapping resolver quem ainda não tinha telefone.
+let _backfillRodando = false;
+async function backfillGrupoMembros() {
+  if (_backfillRodando || !botSock || botStatus !== 'conectado') return;
+  _backfillRodando = true;
+  try {
+    const { rows: grupos } = await pool.query(`SELECT id, jid FROM grupos WHERE jid <> ''`);
+    for (const g of grupos) {
+      try { await importarParticipantesGrupo(g.id, g.jid); }
+      catch (e) { console.error(`Backfill: falha no grupo ${g.id} —`, e.message); }
+    }
+    console.log(`Backfill: reprocessados ${grupos.length} grupo(s) vinculados.`);
+  } catch (e) {
+    console.error('Backfill: erro ao buscar grupos —', e.message);
+  } finally {
+    _backfillRodando = false;
+  }
+}
+cron.schedule('0 */6 * * *', backfillGrupoMembros, { timezone: 'America/Sao_Paulo' });
 
 // Gatilho manual — força a conferência sem esperar o cron (retry manual, testes)
 app.post('/api/boloes/conferir', async (req, res) => {

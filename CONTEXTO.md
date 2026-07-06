@@ -4,7 +4,7 @@ App de gestão de bolões para lotérica física (Taguacenter, Brasília).
 Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreSQL.
 Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
-**Estado em: 05/07/2026**
+**Estado em: 06/07/2026**
 
 ## Como rodar localmente
 
@@ -99,8 +99,9 @@ server/schema.sql   — schema das tabelas Neon (referência)
 
 ```
 grupos        — id, nome, link, membros (nº estimado digitado no cadastro), ativo, jid (JID WhatsApp para o bot)
-grupo_membros — id, grupo_id (FK→grupos, ON DELETE CASCADE), nome, fone, criado
-                (cadastro PERMANENTE de apostadores do grupo, independente de bolão — ver seção própria)
+grupo_membros — id, grupo_id (FK→grupos, ON DELETE CASCADE), nome, fone, wpp_jid, ativo, criado
+                (cadastro PERMANENTE de apostadores do grupo, independente de bolão, importado
+                automaticamente via bot — ver seção própria)
 boloes        — id, loteria, nome, grupo (texto histórico), grupo_id (FK→grupos, ON DELETE SET NULL),
                 cotas_total, valor_cota, concurso, status, numeros (JSONB), criado,
                 resultado (JSONB — dezenas, jogos, maiorAcerto, premioTotal, premiado, rateioPorCota, fonte, conferidoEm)
@@ -205,9 +206,18 @@ permanente (nome + telefone), independente de bolão.
 - Grupo sem nenhum cadastro individual ainda soma automaticamente o "Nº de membros" digitado no
   cadastro do grupo (estimativa) — some sozinha assim que alguém cadastrar os nomes de verdade.
 - Card **"Grupos"** novo no dashboard Admin (total de grupos cadastrados).
-- **Pendência conhecida:** o grupo real "Bolões da Lotérica" tem todos os participantes com
-  privacidade ativada no WhatsApp (JID `@lid`) — o bot não consegue puxar telefone nenhum
-  automaticamente ali. Buscando uma solução melhor pro cadastro automático.
+- **Importação 100% automática via bot** (06/07/2026): `groupMetadata()` cadastra todos os
+  participantes ao vincular o grupo (ou pelo botão "⬇️ Importar"); listener `group-participants.
+  update` mantém entrada/saída sincronizada; listener `messages.upsert` preenche o nome via
+  `pushName` quando a pessoa fala. Índice único parcial (`grupo_id+wpp_jid`) evita duplicar quem
+  já foi cadastrado.
+- **Resolução de número oculto (LID)**: atualizado o bot pra Baileys **v7** (release candidate —
+  risco aceito conscientemente) especificamente pra ter acesso à API `lidMapping.getPNForLID`, que
+  tenta resolver o telefone real de quem aparece como `@lid`. Não é garantido pra todo mundo —
+  depende do bot já ter alguma sessão com a pessoa. Nome/telefone também são atualizados por
+  `contacts.upsert`/`update` (sincronização de contatos) e por um backfill automático a cada 6h.
+- Quem ainda não foi identificado aparece na tela como **"Participante N"** (não mais "Sem nome"
+  cru), com um badge discreto "aguardando identificação".
 
 ## Funcionalidades implementadas
 
@@ -268,3 +278,7 @@ Render atualiza frontend + backend automaticamente em ~1-3 min.
 5. **Configurar `JWT_SECRET` real no Render** — hoje usa fallback fixo funcional, não é segredo real
 6. **Monitorar campo `resultado.fonte`** — se guidi/loteriascaixa-api pararem de responder do
    Render, precisa de uma 4ª fonte
+7. **Confirmar versão do Node no Render** — Baileys v7 exige Node ≥20 (`engines` declarado, mas
+   sem acesso ao painel do Render pra confirmar 100% que o serviço já está numa versão compatível)
+8. **Acompanhar estabilidade do Baileys 7.0.0-rc13** (release candidate, não é versão estável
+   final) e quantos apostadores continuam sem nome/telefone resolvido depois de um tempo

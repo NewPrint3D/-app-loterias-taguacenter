@@ -39,6 +39,16 @@ function normalizarFone(raw) {
 const WPP_SVG = (size=32) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${size}" height="${size}"><path fill="#25d366" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>`;
 const hoje = () => new Date().toLocaleDateString('pt-BR');
 
+// "Sem nome" (ainda não identificado pelo bot) exibe como "Participante N" em vez do texto cru —
+// numerado de forma estável (ordenado por id) dentro da MESMA lista/grupo, pra não confundir com
+// gente que genuinamente digitou "Sem nome" em outro lugar. Nome real do banco não muda, só a exibição.
+function nomeParaExibir(lista, m) {
+  if (m.nome && m.nome.trim().toLowerCase()!=='sem nome') return m.nome;
+  const semNome = (lista||[]).filter(x=>!x.nome || x.nome.trim().toLowerCase()==='sem nome').sort((a,b)=>a.id.localeCompare(b.id));
+  const idx = semNome.findIndex(x=>x.id===m.id);
+  return `Participante ${idx+1}`;
+}
+
 // =============================================
 // TOAST (avisos flutuantes)
 // =============================================
@@ -1029,13 +1039,18 @@ const R = {
       html+=`<div class="empty"><div class="ei">👥</div><p>Nenhum apostador cadastrado neste grupo ainda.</p>
         <p class="txs muted mt8">Esse cadastro é permanente — não depende de ter um bolão ativo agora.</p></div>`;
     } else {
-      html+=roster.map(m=>`<div class="lr">
-          <div><div style="font-weight:500">${m.nome} ${m.wpp_jid?'<span class="txs muted" title="Importado automaticamente do WhatsApp">🤖</span>':''}</div><div class="txs muted">${m.fone||'<em>sem telefone</em>'}</div></div>
+      html+=roster.map(m=>{
+        const semNome = !m.nome || m.nome.trim().toLowerCase()==='sem nome';
+        return `<div class="lr">
+          <div><div style="font-weight:500">${nomeParaExibir(roster,m)} ${m.wpp_jid?'<span class="txs muted" title="Importado automaticamente do WhatsApp">🤖</span>':''}
+            ${semNome?'<span class="badge txs" style="background:var(--border);color:var(--muted);margin-left:4px">aguardando identificação</span>':''}</div>
+          <div class="txs muted">${m.fone||'<em>sem telefone</em>'}</div></div>
           <div class="fx" style="gap:6px">
             <button class="btn btn-o btn-sm" onclick="R._mEditRoster('${m.id}')">✏️</button>
             <button class="btn btn-o btn-sm" onclick="R._delRoster('${m.id}')">🗑️</button>
           </div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
     }
 
     html+=`<div class="divider"></div><div class="sectt mb12">Bolões do grupo</div>`;
@@ -1089,22 +1104,39 @@ const R = {
   },
   _mEditRoster(id) {
     const m=(S.cache.grupoMembros||[]).find(x=>x.id===id); if(!m) return;
+    const semNome = !m.nome || m.nome.trim().toLowerCase()==='sem nome';
     MODAL.open(`<div class="m-title">✏️ Editar apostador</div>
-      <div class="fg"><label>Nome</label><input id="rmn" type="text" value="${m.nome}"></div>
+      <div class="fg"><label>Nome</label><input id="rmn" type="text" value="${semNome?'':m.nome}" placeholder="${semNome?'Ainda não identificado — digite o nome':''}"></div>
       <div class="fg"><label>Telefone (opcional)</label><input id="rmf" type="text" value="${m.fone||''}"></div>
       <input type="hidden" id="rmg" value="${m.grupo_id}">
       <input type="hidden" id="rmid" value="${m.id}">
       <button class="btn btn-p btn-f" onclick="R._saveRosterManual()">Salvar</button>`);
   },
   _saveRosterManual() {
-    const nome=$('rmn')?.value?.trim(); if(!nome){alert('Informe o nome.');return;}
+    const nomeInput=$('rmn')?.value?.trim();
     const idPrevio=$('rmid')?.value;
+    const grupoId=$('rmg').value;
+    const fone=normalizarFone($('rmf')?.value||'');
     const existente=idPrevio && (S.cache.grupoMembros||[]).find(x=>x.id===idPrevio);
+    if(!nomeInput && !existente){alert('Informe o nome.');return;} // editar sem digitar preserva "Sem nome"/placeholder
+    const nome = nomeInput || (existente?existente.nome:'Sem nome');
+
+    // Ao ADICIONAR (não editar) com um telefone que já bate com alguém importado automaticamente
+    // no mesmo grupo (mesmo wpp_jid ou mesmo telefone já resolvido), atualiza esse registro em
+    // vez de criar um duplicado — a pessoa já existe no cadastro, só ainda não tinha nome.
+    let alvo = existente;
+    if (!alvo && fone) {
+      const candidatoJid = fone+'@s.whatsapp.net';
+      alvo = (S.cache.grupoMembros||[]).find(x=>x.grupo_id===grupoId && (x.wpp_jid===candidatoJid || (x.fone && x.fone===fone)));
+    }
+
     DB.grupoMembros.save({
-      id: idPrevio||uid(), grupo_id:$('rmg').value, nome, fone:normalizarFone($('rmf')?.value||''),
-      criado: existente ? existente.criado : hoje(), // preserva a data original ao editar
+      id: alvo?alvo.id:uid(), grupo_id:grupoId, nome, fone: fone||(alvo?.fone||''),
+      wpp_jid: alvo?.wpp_jid||'',
+      criado: alvo?alvo.criado:hoje(), // preserva a data original ao editar/vincular
     });
     MODAL.close(); R._grupoDet();
+    if (alvo && !existente) TOAST.show('✅ Vinculado a um participante já importado do WhatsApp — não foi duplicado.', 'ok');
   },
   _delRoster(id) {
     if(!confirm('Remover este apostador do cadastro do grupo?')) return;
@@ -2482,15 +2514,18 @@ const WPP = {
     } else if (!parts.length) {
       listaHtml = `<div class="muted tsm tc" style="padding:16px">Nenhum participante encontrado.</div>`;
     } else {
-      listaHtml = parts.map(p=>`
-        <label class="dest-item">
+      listaHtml = parts.map(p=>{
+        const semNome = !p.nome || p.nome.trim().toLowerCase()==='sem nome';
+        return `<label class="dest-item">
           <input type="checkbox" ${WPP._selParts.find(x=>x.id===p.id)?'checked':''}
                  onchange="WPP._togglePart(${JSON.stringify(p).replace(/"/g,"'")},this.checked)">
           <div class="dest-info">
-            <div class="dest-nome">${p.nome} ${p.wpp_jid?'<span title="Importado automaticamente">🤖</span>':''}</div>
+            <div class="dest-nome">${nomeParaExibir(todos,p)} ${p.wpp_jid?'<span title="Importado automaticamente">🤖</span>':''}
+              ${semNome?'<span class="badge txs" style="background:var(--border);color:var(--muted);margin-left:4px">aguardando identificação</span>':''}</div>
             <div class="dest-sub txs muted">${p.fone||'sem telefone — DM vai pelo WhatsApp (LID)'}</div>
           </div>
-        </label>`).join('');
+        </label>`;
+      }).join('');
     }
     document.getElementById('dest-parts-lista').innerHTML = listaHtml;
   },
