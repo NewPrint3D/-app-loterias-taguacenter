@@ -68,6 +68,8 @@
 
   <main id="main">
     <div id="view-home"        class="view"></div>
+    <div id="view-cotas"       class="view" hidden></div>
+    <div id="view-lotes"       class="view" hidden></div>
     <div id="view-ia"          class="view" hidden></div>
     <div id="view-grupos"      class="view" hidden></div>
     <div id="view-grupoDet"    class="view" hidden></div>
@@ -94,6 +96,7 @@
   <!-- Nav apostador (usuário simples) -->
   <nav id="nav-user" hidden>
     <button class="nb on" data-v="home"   onclick="R.ir('home')">🏠<span>Início</span></button>
+    <button class="nb"    data-v="cotas"  onclick="R.ir('cotas')">🎟️<span>Cotas</span></button>
     <button class="nb"    data-v="ia"     onclick="R.ir('ia')">🎯<span>Zé Loteca</span></button>
     <button class="nb"    data-v="perfil" onclick="R.ir('perfil')">👤<span>Conta</span></button>
   </nav>

@@ -89,3 +89,46 @@ CREATE TABLE IF NOT EXISTS config (
 
 -- Garante que existe exatamente uma linha de config
 INSERT INTO config(id) VALUES(1) ON CONFLICT(id) DO NOTHING;
+
+-- ============================================================
+-- COTAS AO VIVO — bolão relâmpago (cronômetro + reserva atômica de cota + comprovante)
+-- (o server.js também cria estas tabelas via CREATE TABLE IF NOT EXISTS no startup)
+-- ============================================================
+-- Um "lote" é uma oferta relâmpago de N cotas de um bolão, divulgada nos grupos com contador
+-- regressivo. Status do lote: 'ativo' -> 'esgotado' (100% com comprovante) ou 'encerrado' (tempo).
+CREATE TABLE IF NOT EXISTS lotes (
+  id             TEXT PRIMARY KEY,
+  bolao_id       TEXT,
+  loteria        TEXT DEFAULT '',
+  nome           TEXT DEFAULT 'Bolao',
+  concurso       INTEGER DEFAULT 0,
+  total_cotas    INTEGER NOT NULL,
+  valor_cota     NUMERIC DEFAULT 0,
+  duracao_min    INTEGER DEFAULT 10,
+  inicia_em      TIMESTAMPTZ DEFAULT NOW(),
+  expira_em      TIMESTAMPTZ,
+  status         TEXT DEFAULT 'ativo',
+  grupos         JSONB DEFAULT '[]',
+  aviso50        BOOLEAN DEFAULT false,
+  aviso_esgotado BOOLEAN DEFAULT false,
+  espera         JSONB DEFAULT '[]',
+  criado         TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Cada "cota" é um slot individual que um apostador reserva com o nome e depois anexa o comprovante.
+-- Reserva atômica (UPDATE ... WHERE status='livre') evita dois pegarem a mesma cota.
+-- Status da cota: 'livre' -> 'reservada' (só nome) -> 'comprovante' (anexou, conta no X/N) ->
+-- 'paga' (admin conferiu e confirmou manualmente).
+CREATE TABLE IF NOT EXISTS cotas (
+  id           TEXT PRIMARY KEY,
+  lote_id      TEXT REFERENCES lotes(id) ON DELETE CASCADE,
+  numero       INTEGER,
+  status       TEXT DEFAULT 'livre',
+  nome         TEXT DEFAULT '',
+  fone         TEXT DEFAULT '',
+  comprovante  TEXT,
+  reservada_em TIMESTAMPTZ,
+  pago_em      TIMESTAMPTZ,
+  criado       TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_cotas_lote ON cotas(lote_id);

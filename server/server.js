@@ -46,9 +46,19 @@ const assinarToken = role => jwt.sign({ role }, JWT_SECRET, { expiresIn: JWT_EXP
 // Toda rota pública nova precisa ser adicionada aqui E comentada no próprio app.post/put dela.
 const ROTAS_ESCRITA_PUBLICAS = new Set(['/api/auth/login', '/api/pagamentos', '/api/config/log']);
 
+// Cliente (nome+grupo, sem token) reserva a cota e anexa o comprovante -- essas duas rotas de
+// cota precisam ficar publicas. Reservar e atomico (so pega se estiver 'livre') e anexar so
+// funciona numa cota ja reservada, entao abrir nao deixa ninguem marcar cota como paga (isso e
+// rota protegida /confirmar).
+function ehRotaEscritaPublica(path) {
+  if (ROTAS_ESCRITA_PUBLICAS.has(path)) return true;
+  if (/^\/api\/cotas\/[^/]+\/(reservar|comprovante)$/.test(path)) return true;
+  return false;
+}
+
 app.use((req, res, next) => {
   if (!['POST', 'PUT', 'DELETE'].includes(req.method)) return next();
-  if (ROTAS_ESCRITA_PUBLICAS.has(req.path)) return next();
+  if (ehRotaEscritaPublica(req.path)) return next();
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   if (!token) return res.status(401).json({ ok: false, error: 'Sessão expirada. Faça login novamente.' });
@@ -366,6 +376,182 @@ app.put('/api/pagamentos/:id/status', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ============================================================
+// COTAS AO VIVO — lotes de cotas com cronômetro e reserva atômica
+// ============================================================
+
+// Posta um texto em vários grupos via bot (delay anti-ban). Devolve resultado por grupo.
+async function postarNosGrupos(grupos, texto) {
+  if (!botSock || botStatus !== 'conectado') return { ok: false, motivo: 'bot_desconectado' };
+  const resultados = [];
+  for (const g of (grupos || [])) {
+    if (!g.jid) { resultados.push({ nome: g.nome, ok: false, erro: 'sem jid' }); continue; }
+    try { await botSock.sendMessage(g.jid, { text: texto }); resultados.push({ nome: g.nome, ok: true }); }
+    catch (e) { resultados.push({ nome: g.nome, ok: false, erro: e.message }); }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  return { ok: true, resultados };
+}
+
+function _gruposDoLote(lote) {
+  return typeof lote.grupos === 'string' ? JSON.parse(lote.grupos || '[]') : (lote.grupos || []);
+}
+
+// Verifica os marcos do lote (50% e esgotado) contando só cotas com comprovante anexado ou pagas.
+// Dispara a mensagem automática nos grupos uma única vez por marco (flags aviso50/aviso_esgotado).
+async function verificarMarcosLote(loteId) {
+  try {
+    const { rows: lr } = await pool.query('SELECT * FROM lotes WHERE id=$1', [loteId]);
+    if (!lr.length) return;
+    const lote = lr[0];
+    const grupos = _gruposDoLote(lote);
+    const { rows: cr } = await pool.query(
+      `SELECT COUNT(*)::int AS vendidas FROM cotas WHERE lote_id=$1 AND status IN ('comprovante','paga')`, [loteId]
+    );
+    const vendidas = cr[0].vendidas;
+    const total = lote.total_cotas;
+
+    if (!lote.aviso50 && vendidas >= Math.ceil(total / 2) && vendidas < total) {
+      await pool.query('UPDATE lotes SET aviso50=true WHERE id=$1', [loteId]);
+      postarNosGrupos(grupos,
+        `🔥 *Corra!* Já vendemos *${vendidas}/${total}* cotas do "${lote.nome}"!\nNão fique de fora — garanta a sua antes que esgote o tempo ou as cotas. 🍀`
+      ).catch(() => {});
+    }
+    if (!lote.aviso_esgotado && vendidas >= total) {
+      await pool.query(`UPDATE lotes SET aviso_esgotado=true, status='esgotado' WHERE id=$1`, [loteId]);
+      postarNosGrupos(grupos,
+        `✅ *COTAS ESGOTADAS!* O bolão "${lote.nome}" foi 100% vendido. Obrigado a todos! 🎉\n\n` +
+        `Ficou de fora e quer garantir vaga no próximo lote? Responda com *"fiquei de fora"* — ` +
+        `se juntar gente suficiente, a gente abre um novo lote! 🍀`
+      ).catch(() => {});
+    }
+  } catch (e) { console.error('verificarMarcosLote:', e.message); }
+}
+
+// Listar todos os lotes com as cotas embutidas (admin) — o cliente usa o mesmo GET e filtra no app.
+app.get('/api/lotes', async (req, res) => {
+  try {
+    const { rows: lotes } = await pool.query('SELECT * FROM lotes ORDER BY criado DESC');
+    const { rows: cotas } = await pool.query('SELECT * FROM cotas ORDER BY numero ASC');
+    const porLote = {};
+    cotas.forEach(c => { (porLote[c.lote_id] = porLote[c.lote_id] || []).push(c); });
+    res.json(lotes.map(l => ({ ...l, cotas: porLote[l.id] || [] })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Um lote específico + cotas — usado no polling da sala do cliente e do painel do admin.
+app.get('/api/lotes/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM lotes WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Lote não encontrado' });
+    const { rows: cotas } = await pool.query('SELECT * FROM cotas WHERE lote_id=$1 ORDER BY numero ASC', [req.params.id]);
+    res.json({ ...rows[0], cotas });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Criar lote (admin) — gera N cotas 'livre', define o cronômetro e divulga nos grupos via bot.
+app.post('/api/lotes', async (req, res) => {
+  const { id, bolao_id, loteria, nome, concurso, total_cotas, valor_cota, duracao_min, grupos } = req.body;
+  const n = parseInt(total_cotas, 10) || 0;
+  if (!id || n < 1 || n > 200) return res.status(400).json({ error: 'Total de cotas inválido (1 a 200).' });
+  const dur = [5, 10, 15, 30].includes(+duracao_min) ? +duracao_min : 10;
+  const inicia = new Date();
+  const expira = new Date(inicia.getTime() + dur * 60000);
+  try {
+    await pool.query(
+      `INSERT INTO lotes(id,bolao_id,loteria,nome,concurso,total_cotas,valor_cota,duracao_min,inicia_em,expira_em,status,grupos,aviso50,aviso_esgotado,espera,criado)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'ativo',$11,false,false,'[]',NOW()) ON CONFLICT(id) DO NOTHING`,
+      [id, bolao_id || null, loteria || '', nome || 'Bolão', concurso || 0, n, valor_cota || 0, dur,
+       inicia.toISOString(), expira.toISOString(), JSON.stringify(grupos || [])]
+    );
+    // Gera as cotas numeradas 1..N num único INSERT
+    const vals = [];
+    const params = [];
+    for (let i = 1; i <= n; i++) {
+      params.push(crypto.randomUUID(), id, i);
+      vals.push(`($${params.length - 2},$${params.length - 1},$${params.length},'livre',NOW())`);
+    }
+    await pool.query(`INSERT INTO cotas(id,lote_id,numero,status,criado) VALUES ${vals.join(',')} ON CONFLICT(id) DO NOTHING`, params);
+
+    // Divulga nos grupos (o acesso é dentro do app: a mensagem manda abrir o app e escolher a cota).
+    const valorFmt = (+valor_cota || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    const nomeLt = NOMES_LOTERIA[loteria] || loteria || '';
+    const msg =
+      `🎟️ *COTAS ABERTAS — ${nome}*${nomeLt ? ' · ' + nomeLt : ''}\n\n` +
+      `Estão disponíveis *${n} cotas* a *R$ ${valorFmt}* cada.\n` +
+      `⏳ Corra: você tem *${dur} minutos* — ou até as cotas esgotarem!\n\n` +
+      `👉 Abra o app *Lotérica Taguacenter*, entre com seu nome + grupo e *escolha sua cota* antes que acabe o tempo ou as cotas.\n\n` +
+      `_Jogue com responsabilidade. Sorteios são aleatórios e auditados pela Caixa._ 🍀`;
+    let aviso = { ok: false, motivo: 'sem_grupos' };
+    if (Array.isArray(grupos) && grupos.length) aviso = await postarNosGrupos(grupos, msg);
+    res.json({ ok: true, aviso });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/lotes/:id', async (req, res) => {
+  try { await pool.query('DELETE FROM lotes WHERE id=$1', [req.params.id]); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/lotes/:id/encerrar', async (req, res) => {
+  try { await pool.query(`UPDATE lotes SET status='encerrado' WHERE id=$1`, [req.params.id]); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PÚBLICA — cliente reserva a cota. Atômico: só pega se ainda estiver 'livre' e o lote ativo/no prazo.
+app.post('/api/cotas/:id/reservar', async (req, res) => {
+  const { nome, fone } = req.body;
+  if (!nome || !String(nome).trim()) return res.status(400).json({ ok: false, error: 'Informe seu nome.' });
+  try {
+    const { rows } = await pool.query(
+      `UPDATE cotas SET status='reservada', nome=$2, fone=$3, reservada_em=NOW()
+       WHERE id=$1 AND status='livre'
+         AND lote_id IN (SELECT id FROM lotes WHERE status='ativo' AND expira_em > NOW())
+       RETURNING *`,
+      [req.params.id, String(nome).trim().slice(0, 60), normalizarFoneServidor(fone || '')]
+    );
+    if (!rows.length) return res.status(409).json({ ok: false, error: 'Essa cota acabou de ser reservada ou o tempo esgotou. Escolha outra.' });
+    res.json({ ok: true, cota: rows[0] });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// PÚBLICA — cliente anexa o comprovante à cota que reservou. Vira 'comprovante' (verde p/ ele,
+// conta no X/N). O admin ainda confere e confirma manualmente (rota protegida /confirmar).
+app.post('/api/cotas/:id/comprovante', async (req, res) => {
+  const { img } = req.body;
+  if (!img) return res.status(400).json({ ok: false, error: 'Anexe a imagem do comprovante.' });
+  try {
+    const { rows } = await pool.query(
+      `UPDATE cotas SET status='comprovante', comprovante=$2
+       WHERE id=$1 AND status IN ('reservada','comprovante') RETURNING *`,
+      [req.params.id, img]
+    );
+    if (!rows.length) return res.status(409).json({ ok: false, error: 'Reserve a cota antes de anexar o comprovante.' });
+    await verificarMarcosLote(rows[0].lote_id);
+    res.json({ ok: true, cota: rows[0] });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Admin confere o comprovante e confirma o pagamento (verde "pago" no painel).
+app.put('/api/cotas/:id/confirmar', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`UPDATE cotas SET status='paga', pago_em=NOW() WHERE id=$1 RETURNING *`, [req.params.id]);
+    res.json({ ok: true, cota: rows[0] || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Admin libera uma cota de volta pra venda (ex: reserva que não pagou). Reabre o lote se esgotado.
+app.put('/api/cotas/:id/liberar', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE cotas SET status='livre', nome='', fone='', comprovante=NULL, reservada_em=NULL, pago_em=NULL WHERE id=$1 RETURNING *`,
+      [req.params.id]
+    );
+    if (rows.length) await pool.query(`UPDATE lotes SET status='ativo', aviso_esgotado=false WHERE id=$1 AND status='esgotado'`, [rows[0].lote_id]);
+    res.json({ ok: true, cota: rows[0] || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- USUÁRIOS ----
 app.get('/api/usuarios', async (req, res) => {
   try {
@@ -498,6 +684,45 @@ pool.query(`CREATE TABLE IF NOT EXISTS wpp_cadastros (
   iniciado TIMESTAMPTZ DEFAULT NOW()
 )`).catch(() => {});
 
+// ---- COTAS AO VIVO ----
+// Um "lote" e uma oferta relampago de N cotas de um bolao, divulgada nos grupos com cronometro
+// regressivo. Cada "cota" e um slot individual que um apostador reserva com o nome e depois anexa
+// o comprovante. Reserva atomica (UPDATE ... WHERE status='livre') evita dois pegarem a mesma cota.
+// Status da cota: 'livre' -> 'reservada' (so nome) -> 'comprovante' (anexou, verde p/ cliente,
+// conta no X/N) -> 'paga' (admin conferiu e confirmou manualmente).
+// Status do lote: 'ativo' -> 'esgotado' (100% com comprovante) ou 'encerrado' (tempo esgotou).
+pool.query(`CREATE TABLE IF NOT EXISTS lotes (
+  id TEXT PRIMARY KEY,
+  bolao_id TEXT,
+  loteria TEXT DEFAULT '',
+  nome TEXT DEFAULT 'Bolao',
+  concurso INTEGER DEFAULT 0,
+  total_cotas INTEGER NOT NULL,
+  valor_cota NUMERIC DEFAULT 0,
+  duracao_min INTEGER DEFAULT 10,
+  inicia_em TIMESTAMPTZ DEFAULT NOW(),
+  expira_em TIMESTAMPTZ,
+  status TEXT DEFAULT 'ativo',
+  grupos JSONB DEFAULT '[]',
+  aviso50 BOOLEAN DEFAULT false,
+  aviso_esgotado BOOLEAN DEFAULT false,
+  espera JSONB DEFAULT '[]',
+  criado TIMESTAMPTZ DEFAULT NOW()
+)`).catch(() => {});
+pool.query(`CREATE TABLE IF NOT EXISTS cotas (
+  id TEXT PRIMARY KEY,
+  lote_id TEXT REFERENCES lotes(id) ON DELETE CASCADE,
+  numero INTEGER,
+  status TEXT DEFAULT 'livre',
+  nome TEXT DEFAULT '',
+  fone TEXT DEFAULT '',
+  comprovante TEXT,
+  reservada_em TIMESTAMPTZ,
+  pago_em TIMESTAMPTZ,
+  criado TIMESTAMPTZ DEFAULT NOW()
+)`).catch(() => {});
+pool.query(`CREATE INDEX IF NOT EXISTS idx_cotas_lote ON cotas(lote_id)`).catch(() => {});
+
 async function pgAuthState() {
   await pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`);
   const { BufferJSON, initAuthCreds } = await import('@whiskeysockets/baileys'); // v7 é ESM puro, sem require()
@@ -613,6 +838,45 @@ async function conectarBot() {
               }
             } catch (e) { console.error('Erro ao atualizar participante via pushName:', e.message); }
           }
+
+          // ---- LISTA DE ESPERA "fiquei de fora" (cotas ao vivo) ----
+          // Independe do cadastro automático estar ligado: quem manda "fiquei de fora" depois de um
+          // lote esgotar/encerrar entra na lista de espera do lote mais recente daquele grupo, e o
+          // lotérico é avisado no WhatsApp pessoal pra decidir se abre um novo lote.
+          try {
+            const textoEspera = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || '')
+              .trim().toLowerCase();
+            if (/fiquei\s+de\s+fora/.test(textoEspera)) {
+              const { rows: gg } = await pool.query('SELECT id FROM grupos WHERE jid=$1', [groupJid]);
+              if (gg.length) {
+                const { rows: lr } = await pool.query(
+                  `SELECT * FROM lotes WHERE grupos::text LIKE $1 AND status IN ('esgotado','encerrado')
+                   ORDER BY criado DESC LIMIT 1`, ['%"' + gg[0].id + '"%']
+                );
+                if (lr.length) {
+                  const lote = lr[0];
+                  const espera = typeof lote.espera === 'string' ? JSON.parse(lote.espera || '[]') : (lote.espera || []);
+                  if (!espera.some(e => e.jid === senderJid)) {
+                    const nomeE = msg.pushName || 'Interessado';
+                    espera.push({ jid: senderJid, nome: nomeE, em: new Date().toISOString() });
+                    await pool.query('UPDATE lotes SET espera=$2 WHERE id=$1', [lote.id, JSON.stringify(espera)]);
+                    await botSock.sendMessage(groupJid, {
+                      text: `📝 Anotado, *${nomeE}*! Você entrou na lista de espera do próximo lote de "${lote.nome}". Avisaremos assim que abrir. 🍀`,
+                      mentions: [senderJid],
+                    });
+                    try {
+                      const c = await pool.query('SELECT admin_fone FROM config WHERE id=1');
+                      const fone = c.rows[0]?.admin_fone;
+                      if (fone) await botSock.sendMessage(`${fone}@s.whatsapp.net`, {
+                        text: `📝 ${nomeE} pediu "fiquei de fora" no lote "${lote.nome}". Lista de espera agora: ${espera.length} pessoa(s).`,
+                      });
+                    } catch {}
+                  }
+                  continue; // já tratou essa mensagem como "fiquei de fora"
+                }
+              }
+            }
+          } catch (e) { console.error('Lista de espera (fiquei de fora):', e.message); }
 
           // Verifica se este grupo está com cadastro ativo
           const cad = await pool.query(
@@ -1318,6 +1582,14 @@ async function backfillGrupoMembros() {
   }
 }
 cron.schedule('0 */6 * * *', backfillGrupoMembros, { timezone: 'America/Sao_Paulo' });
+
+// Expiracao dos lotes de cotas ao vivo -- a cada minuto, fecha os lotes 'ativo' cujo cronometro ja
+// passou. Nao mexe nas cotas: reservas sem pagamento continuam 'reservada' (pendente) pro admin
+// decidir manualmente (liberar/confirmar) -- decisao do loterico.
+cron.schedule('* * * * *', async () => {
+  try { await pool.query(`UPDATE lotes SET status='encerrado' WHERE status='ativo' AND expira_em < NOW()`); }
+  catch (e) { console.error('Expiracao de lotes:', e.message); }
+}, { timezone: 'America/Sao_Paulo' });
 
 // Gatilho manual — força a conferência sem esperar o cron (retry manual, testes)
 app.post('/api/boloes/conferir', async (req, res) => {

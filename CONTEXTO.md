@@ -219,6 +219,36 @@ permanente (nome + telefone), independente de bolão.
 - Quem ainda não foi identificado aparece na tela como **"Participante N"** (não mais "Sem nome"
   cru), com um badge discreto "aguardando identificação".
 
+## Cotas ao Vivo — Bolão Relâmpago (07/07/2026)
+
+Serviço de venda por urgência pedido pelo cliente. O admin abre um **lote** de N cotas de um bolão
+acumulado, com **contador regressivo** (5/10/15/30 min), e o bot divulga nos grupos vinculados. O
+cliente abre o app (nome + grupo, sem login), **escolhe uma cota livre**, reserva com o nome e,
+depois de pagar, **anexa o comprovante** na própria cota. Contador **X/N** ao vivo, aviso de **50%**
+e mensagem de **esgotado** postados automaticamente no grupo pelo bot.
+
+- **Backend (`server/server.js`)** — módulo "COTAS AO VIVO":
+  - Tabelas `lotes` e `cotas` (criadas via `CREATE TABLE IF NOT EXISTS` no startup; ref. em `schema.sql`).
+  - Status da **cota**: `livre` → `reservada` (só nome) → `comprovante` (anexou, conta no X/N) →
+    `paga` (admin confere e confirma). Status do **lote**: `ativo` → `esgotado`/`encerrado`.
+  - Reserva **atômica**: `UPDATE cotas SET status='reservada' ... WHERE status='livre' AND lote ativo`
+    — dois clientes não pegam a mesma cota; se o tempo/cota esgotou devolve 409 "escolha outra".
+  - Rotas: `GET/POST/DELETE /api/lotes`, `PUT /api/lotes/:id/encerrar`, `GET /api/lotes/:id`,
+    **públicas** `POST /api/cotas/:id/reservar` e `/comprovante` (cliente sem token),
+    protegidas `PUT /api/cotas/:id/confirmar` e `/liberar` (admin).
+  - `postarNosGrupos()` usa o bot Baileys (delay 3s anti-ban). `verificarMarcosLote()` dispara 50%
+    e esgotado uma única vez (flags `aviso50`/`aviso_esgotado`).
+  - Cron a cada minuto encerra lotes cujo cronômetro passou (reservas sem pagamento ficam pendentes
+    pro admin decidir). Listener "**fiquei de fora**" no bot: quem manda isso entra na lista de
+    espera (`lotes.espera`) do último lote do grupo e avisa o lotérico no WhatsApp pessoal.
+- **Frontend (`js/app.js` módulo `COTAS`)**:
+  - Admin: menu Admin → **🎟️ Cotas ao Vivo** (tela `lotes`) — criar lote (modal), acompanhar ao
+    vivo (cronômetro, X/N, grid de cotas com nome/status), **confirmar/liberar** cada cota, ver
+    comprovante, popup a cada venda. Polling de 3s + cronômetro de 1s.
+  - Cliente: nav **🎟️ Cotas** (tela `cotas`) + banner no Início quando há lote ativo — escolher
+    cota, reservar (nome pré-preenchido), anexar comprovante (base64), contador e aviso de 50%.
+  - Cota do cliente é lembrada em `localStorage['ltr_minhas_cotas']` (ele não tem login/token).
+
 ## Funcionalidades implementadas
 
 - Splash screen + login (bcrypt + JWT); cliente entra só com nome + grupo (sem token)

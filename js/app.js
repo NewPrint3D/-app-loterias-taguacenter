@@ -571,12 +571,14 @@ const R = {
   ir(tela, params={}) {
     if(S.tela&&S.tela!==tela) S.stack.push(S.tela);
     S.tela=tela;
+    // Para o polling das cotas ao vivo ao sair da tela (o handler reinicia ao entrar)
+    if(typeof COTAS!=='undefined' && tela!=='cotas' && tela!=='lotes') COTAS.parar();
     document.querySelectorAll('.view').forEach(v=>v.hidden=true);
     $(`view-${tela}`).hidden=false;
     // Atualiza botão ativo no nav correto
     const nav = AUTH.isAdmin() ? $('nav-admin') : $('nav-user');
     nav?.querySelectorAll('.nb').forEach(b=>b.classList.toggle('on',b.dataset.v===tela));
-    const noBack=['home','admin','resultados','perfil','controle','ia','grupos'];
+    const noBack=['home','admin','resultados','perfil','controle','ia','grupos','cotas'];
     $('btn-back').hidden=noBack.includes(tela);
     const fn=R['_'+tela];
     if(fn) fn(params);
@@ -693,6 +695,7 @@ const R = {
     }));
 
     R._hRender(S._hLt);
+    COTAS.checarBannerHome();
   },
 
   _hSel(ltId) {
@@ -769,6 +772,8 @@ const R = {
 
   _ltClick(lt){S.loteria=lt; R.ir('boloes');},
   _iaClick(lt){S.loteria=lt; R.ir('ia');},
+  _cotas(){ COTAS.entrarCliente(); },
+  _lotes(){ COTAS.entrarAdmin(); },
 
   // ---- ZÉ LOTECA — ESTATÍSTICAS E GERADOR ----
   async _ia(params={}) {
@@ -1391,6 +1396,7 @@ const R = {
         <div class="amenu-c" onclick="R.ir('whatsapp')"><span class="amenu-i">${WPP_SVG(38)}</span><div class="amenu-n">WhatsApp</div></div>
         <div class="amenu-c" onclick="R.ir('stats')"><span class="amenu-i">📊</span><div class="amenu-n">Estatísticas</div></div>
         <div class="amenu-c" onclick="R.ir('pagamentos')"><span class="amenu-i">💳</span><div class="amenu-n">Pagamentos</div></div>
+        <div class="amenu-c" style="border-color:var(--gold)" onclick="R.ir('lotes')"><span class="amenu-i">🎟️</span><div class="amenu-n">Cotas ao Vivo</div></div>
         <div class="amenu-c" onclick="R.ir('boloes')"><span class="amenu-i">🎲</span><div class="amenu-n">Bolões</div></div>
         <div class="amenu-c" onclick="R.ir('usuarios')"><span class="amenu-i">👥</span><div class="amenu-n">Usuários <span style="font-size:.65rem;background:var(--primary);color:#000;border-radius:10px;padding:1px 5px;margin-left:2px">${qtUsr}</span></div></div>
         ${isdev?`<div class="amenu-c" style="border-color:var(--red)" onclick="R.ir('controle')"><span class="amenu-i">🔒</span><div class="amenu-n" style="color:var(--red)">Controle Dev</div></div>`:''}
@@ -2806,6 +2812,274 @@ const CARTELA = {
     if (!S.cartela) return;
     const a = document.createElement('a');
     a.href = S.cartela.url; a.download = S.cartela.nome; a.click();
+  },
+};
+
+// =============================================
+// COTAS AO VIVO — bolão relâmpago (cronômetro + reserva + comprovante)
+// Admin cria um lote de N cotas com contador regressivo (5/10/15/30 min), o bot divulga nos grupos,
+// o cliente escolhe a cota, reserva com o nome e anexa o comprovante. Contador X/N ao vivo, aviso de
+// 50% e mensagem de esgotado (essas duas o backend também posta no grupo via bot). Ver server.js.
+// =============================================
+const COTAS = {
+  _timer: null, _tickN: 0, _prevVend: {}, _busy: false,
+
+  _esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); },
+  _restanteMs(l) { return new Date(l.expira_em).getTime() - Date.now(); },
+  _fmtMMSS(ms) { if (ms < 0) ms = 0; const s = Math.floor(ms/1000); return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); },
+  _vendidas(l) { return (l.cotas||[]).filter(c => c.status==='comprovante' || c.status==='paga').length; },
+  _ativo(l) { return l.status==='ativo' && this._restanteMs(l) > 0; },
+
+  // Cliente nao tem login/token — guarda a cota que ele reservou (por lote) no aparelho dele.
+  _minhas() { try { return JSON.parse(localStorage.getItem('ltr_minhas_cotas')||'{}'); } catch { return {}; } },
+  _guardarMinha(loteId, cotaId) { const m = this._minhas(); m[loteId] = cotaId; localStorage.setItem('ltr_minhas_cotas', JSON.stringify(m)); },
+  _minhaCota(l) {
+    const id = this._minhas()[l.id];
+    let c = (l.cotas||[]).find(x => x.id === id);
+    if (!c) { const nm = (S.user?.nome||'').trim().toLowerCase(); c = (l.cotas||[]).find(x => x.status!=='livre' && x.nome && x.nome.trim().toLowerCase()===nm); }
+    return c || null;
+  },
+  _acharCota(id) { for (const l of (S._lotesCache||[])) { const c = (l.cotas||[]).find(x => x.id===id); if (c) return c; } return null; },
+
+  async _carregar() {
+    const l = await _api.get('/api/lotes');
+    if (Array.isArray(l)) S._lotesCache = l.map(x => ({ ...x, valor_cota:+x.valor_cota||0, total_cotas:+x.total_cotas||0 }));
+    return S._lotesCache || [];
+  },
+
+  parar() { if (this._timer) { clearInterval(this._timer); this._timer = null; } },
+  iniciar(modo) { this.parar(); this._tickN = 0; this._timer = setInterval(() => this._tick(modo), 1000); },
+  async _tick(modo) {
+    (S._lotesCache||[]).forEach(l => { const el = $('cd-'+l.id); if (el) { const ms = this._restanteMs(l); el.textContent = this._fmtMMSS(ms); if (ms<=0) el.classList.add('cd-fim'); } });
+    this._tickN++;
+    if (this._tickN % 3 === 0 && !this._busy && $('modal').hidden) {
+      if (S.tela !== (modo==='admin' ? 'lotes' : 'cotas')) { this.parar(); return; }
+      await this._carregar();
+      if (modo === 'admin') { this._detectarVendas(); this._renderAdmin(); }
+      else this._renderCliente();
+    }
+  },
+  _detectarVendas() {
+    (S._lotesCache||[]).forEach(l => {
+      const v = this._vendidas(l), p = this._prevVend[l.id];
+      if (p != null && v > p) TOAST.show('🔔 Nova venda! ' + l.nome + ': ' + v + '/' + l.total_cotas, 'ok');
+      this._prevVend[l.id] = v;
+    });
+  },
+
+  // ---- ADMIN ----
+  async entrarAdmin() {
+    if (!AUTH.isAdmin()) { R.ir('home'); return; }
+    $('h-title').textContent = 'Cotas ao Vivo';
+    $('view-lotes').innerHTML = '<div class="loading"><div class="spinner"></div> Carregando lotes...</div>';
+    await this._carregar(); this._prevVend = {}; this._detectarVendas(); this._renderAdmin();
+    this.iniciar('admin');
+  },
+  _renderAdmin() {
+    const lotes = S._lotesCache || [];
+    const ativos = lotes.filter(l => this._ativo(l));
+    const outros = lotes.filter(l => !this._ativo(l));
+    $('view-lotes').innerHTML =
+      '<button class="btn btn-p btn-f mb12" onclick="COTAS.modalNovo()">🎟️ Novo lote relâmpago</button>' +
+      (lotes.length ? '' : '<div class="empty"><div style="font-size:2.2rem">🎟️</div><p>Nenhum lote criado ainda.</p><p class="txs muted">Crie um lote de cotas com contador regressivo e divulgue nos grupos num toque.</p></div>') +
+      (ativos.length ? '<div class="sectt mb8">🔴 Ao vivo</div>' : '') +
+      ativos.map(l => this._cardAdmin(l)).join('') +
+      (outros.length ? '<div class="sectt mt12 mb8">Encerrados / esgotados</div>' : '') +
+      outros.map(l => this._cardAdmin(l)).join('');
+  },
+  _cardAdmin(l) {
+    const v = this._vendidas(l), total = l.total_cotas;
+    const reservadas = (l.cotas||[]).filter(c => c.status==='reservada').length;
+    const pct = total ? Math.round(v/total*100) : 0;
+    const ativo = this._ativo(l), lt = LOTERIAS[l.loteria];
+    const statusTxt = ({ esgotado:'esgotado', encerrado:'encerrado' })[l.status] || (ativo ? 'restante' : 'encerrado');
+    return '<div class="lote-card">' +
+      '<div class="fxb">' +
+        '<div><div class="lote-nome">' + this._esc(l.nome) + '</div><div class="muted txs">' + (lt?lt.emoji+' '+lt.nome:'') + ' · Conc. #' + (l.concurso||'—') + ' · ' + fmt$(l.valor_cota) + '/cota</div></div>' +
+        '<div class="lote-cd ' + (ativo?'':'cd-off') + '"><div class="lote-cd-n" id="cd-' + l.id + '">' + this._fmtMMSS(this._restanteMs(l)) + '</div><div class="txs muted">' + statusTxt + '</div></div>' +
+      '</div>' +
+      '<div class="lote-bar"><div class="lote-bar-fill" style="width:' + pct + '%"></div></div>' +
+      '<div class="fxb txs mb8"><span class="fw7">' + v + '/' + total + ' vendidas</span><span class="muted">' + reservadas + ' aguardando comprovante</span></div>' +
+      '<div class="cota-grid">' + (l.cotas||[]).map(c => this._cotaAdmin(c)).join('') + '</div>' +
+      '<div class="fxb mt8">' +
+        (ativo ? '<button class="btn btn-o btn-sm" onclick="COTAS.encerrar(\'' + l.id + '\')">⏹️ Encerrar agora</button>' : '<span></span>') +
+        '<button class="btn btn-d btn-sm" onclick="COTAS.excluir(\'' + l.id + '\')">🗑️ Excluir</button>' +
+      '</div>' +
+    '</div>';
+  },
+  _cotaAdmin(c) {
+    const cls = ({ livre:'ct-livre', reservada:'ct-res', comprovante:'ct-comp', paga:'ct-paga' })[c.status] || '';
+    const badge = ({ livre:'Livre', reservada:'⏳ Pendente', comprovante:'📎 Enviado', paga:'✅ Pago' })[c.status];
+    let acoes = '';
+    if (c.status==='comprovante') acoes = '<button class="ct-b" title="Ver comprovante" onclick="COTAS.verComprovante(\'' + c.id + '\')">👁️</button><button class="ct-b ok" title="Confirmar pago" onclick="COTAS.confirmar(\'' + c.id + '\')">✅</button><button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
+    else if (c.status==='reservada') acoes = '<button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
+    else if (c.status==='paga') acoes = '<button class="ct-b" title="Ver comprovante" onclick="COTAS.verComprovante(\'' + c.id + '\')">👁️</button><button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
+    const nome = c.nome ? this._esc(c.nome) : '<span class="muted">livre</span>';
+    return '<div class="cota ' + cls + '"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">' + nome + '</div><div class="cota-badge">' + badge + '</div><div class="cota-acoes">' + acoes + '</div></div>';
+  },
+  verComprovante(id) {
+    const c = this._acharCota(id);
+    if (!c || !c.comprovante) { TOAST.show('Sem comprovante anexado.', 'err'); return; }
+    MODAL.open('<div class="sectt mb8">Comprovante — ' + this._esc(c.nome) + ' (cota #' + c.numero + ')</div><img src="' + c.comprovante + '" style="width:100%;border-radius:10px" alt="comprovante">');
+  },
+  async confirmar(id) { await _api.put('/api/cotas/' + id + '/confirmar'); await this._carregar(); this._renderAdmin(); TOAST.show('✅ Pagamento confirmado.', 'ok'); },
+  async liberar(id) { if (!confirm('Liberar essa cota de volta pra venda?')) return; await _api.put('/api/cotas/' + id + '/liberar'); await this._carregar(); this._renderAdmin(); },
+  async encerrar(id) { if (!confirm('Encerrar o lote agora?')) return; await _api.put('/api/lotes/' + id + '/encerrar'); await this._carregar(); this._renderAdmin(); },
+  async excluir(id) { if (!confirm('Excluir o lote e todas as cotas? Não dá pra desfazer.')) return; await _api.del('/api/lotes/' + id); await this._carregar(); this._renderAdmin(); },
+
+  modalNovo() {
+    const bs = DB.boloes.list();
+    const grupos = DB.grupos.list().filter(g => g.ativo !== false);
+    const optBolao = bs.length
+      ? '<div class="fg mb8"><label>Puxar de um bolão (opcional)</label><select id="lt-bolao" onchange="COTAS._prefill(this.value)"><option value="">— preencher manual —</option>' +
+        bs.map(b => '<option value="' + b.id + '">' + this._esc(b.nome) + ' · ' + (LOTERIAS[b.loteria]?.nome||b.loteria) + '</option>').join('') + '</select></div>'
+      : '';
+    const optLot = Object.values(LOTERIAS).map(x => '<option value="' + x.id + '">' + x.emoji + ' ' + x.nome + '</option>').join('');
+    const durRow = [5,10,15,30].map((d,i) => '<label class="dur-opt"><input type="radio" name="lt-dur" value="' + d + '" ' + (i===1?'checked':'') + '><span>' + d + ' min</span></label>').join('');
+    const grpRows = grupos.length
+      ? grupos.map(g => '<label class="grp-check"><input type="checkbox" class="lt-grp" value="' + g.id + '" ' + (g.jid?'checked':'') + '><span>' + this._esc(g.nome) + ' ' + (g.jid ? '<span class="badge txs" style="background:var(--primary);color:#000">Bot ✓</span>' : '<span class="txs muted">(sem bot — não recebe automático)</span>') + '</span></label>').join('')
+      : '<div class="txs muted">Nenhum grupo cadastrado.</div>';
+    MODAL.open(
+      '<div class="sectt mb8">🎟️ Novo lote relâmpago</div>' +
+      optBolao +
+      '<div class="fg mb8"><label>Nome do bolão</label><input id="lt-nome" placeholder="Ex: Mega Acumulada 300 mi"></div>' +
+      '<div class="fxb" style="gap:8px">' +
+        '<div class="fg mb8" style="flex:1"><label>Loteria</label><select id="lt-lot">' + optLot + '</select></div>' +
+        '<div class="fg mb8" style="width:96px"><label>Concurso</label><input id="lt-conc" type="number" placeholder="0"></div>' +
+      '</div>' +
+      '<div class="fxb" style="gap:8px">' +
+        '<div class="fg mb8" style="flex:1"><label>Qtd. de cotas</label><input id="lt-qtd" type="number" value="10" min="1" max="200"></div>' +
+        '<div class="fg mb8" style="flex:1"><label>Valor da cota (R$)</label><input id="lt-valor" type="number" step="0.01" placeholder="0,00"></div>' +
+      '</div>' +
+      '<div class="fg mb8"><label>⏳ Tempo (contador regressivo)</label><div class="dur-row">' + durRow + '</div></div>' +
+      '<div class="fg mb8"><label>📢 Divulgar nos grupos</label>' + grpRows + '</div>' +
+      '<button class="btn btn-p btn-f mt8" onclick="COTAS.criar()">🚀 Abrir cotas e divulgar</button>' +
+      '<div class="txs muted mt8">As mensagens de "50% vendido" e "esgotado" saem sozinhas nos grupos pelo bot.</div>'
+    );
+  },
+  _prefill(id) {
+    const b = DB.boloes.get(id); if (!b) return;
+    $('lt-nome').value = b.nome||''; $('lt-lot').value = b.loteria||'megasena';
+    $('lt-conc').value = b.concurso||''; $('lt-valor').value = b.valor_cota||'';
+    if (b.cotas_total) $('lt-qtd').value = b.cotas_total;
+  },
+  async criar() {
+    const nome = $('lt-nome').value.trim();
+    const loteria = $('lt-lot').value;
+    const concurso = +$('lt-conc').value || 0;
+    const total_cotas = +$('lt-qtd').value || 0;
+    const valor_cota = +$('lt-valor').value || 0;
+    const duracao_min = +(document.querySelector('input[name=lt-dur]:checked')?.value) || 10;
+    if (!nome) { TOAST.show('Dê um nome ao bolão.', 'err'); return; }
+    if (total_cotas < 1 || total_cotas > 200) { TOAST.show('Qtd. de cotas deve ser de 1 a 200.', 'err'); return; }
+    const grupos = [...document.querySelectorAll('.lt-grp:checked')].map(ch => { const g = DB.grupos.list().find(x => x.id===ch.value); return g ? { nome:g.nome, jid:g.jid||'' } : null; }).filter(Boolean);
+    const id = uid();
+    const r = await _api.post('/api/lotes', { id, loteria, nome, concurso, total_cotas, valor_cota, duracao_min, grupos });
+    if (!r) { TOAST.show('Erro ao criar o lote — verifique a conexão.', 'err'); return; }
+    if (!r.ok) { TOAST.show('Servidor recusou (' + r.status + '). O backend com o módulo de cotas ainda não foi publicado — faça o deploy do server.js.', 'err'); return; }
+    MODAL.close();
+    await this._carregar(); this._prevVend = {}; this._detectarVendas(); this._renderAdmin();
+    const data = await r.json().catch(() => ({}));
+    const aviso = data.aviso;
+    if (aviso && aviso.ok) { const ok = (aviso.resultados||[]).filter(x => x.ok).length; TOAST.show('🚀 Lote aberto! Divulgado em ' + ok + ' grupo(s).', 'ok'); }
+    else if (aviso && aviso.motivo==='bot_desconectado') TOAST.show('Lote criado, mas o bot do WhatsApp está desconectado — divulgue manualmente.', 'err');
+    else if (aviso && aviso.motivo==='sem_grupos') TOAST.show('🚀 Lote aberto! (nenhum grupo selecionado)', 'ok');
+    else TOAST.show('🚀 Lote aberto!', 'ok');
+  },
+
+  // ---- CLIENTE ----
+  async entrarCliente() {
+    $('h-title').textContent = 'Cotas ao Vivo';
+    $('view-cotas').innerHTML = '<div class="loading"><div class="spinner"></div> Carregando cotas...</div>';
+    await this._carregar(); this._renderCliente();
+    this.iniciar('cliente');
+  },
+  _renderCliente() {
+    const lotes = (S._lotesCache||[]).filter(l => this._ativo(l));
+    const el = $('view-cotas'); if (!el) return;
+    if (!lotes.length) { el.innerHTML = '<div class="empty" style="margin-top:40px"><div style="font-size:2.6rem">🎟️</div><p>Nenhuma cota aberta agora.</p><p class="txs muted">Quando o lotérico abrir um bolão relâmpago, ele aparece aqui e no grupo do WhatsApp. Fique de olho!</p></div>'; return; }
+    el.innerHTML = lotes.map(l => this._cardCliente(l)).join('');
+  },
+  _cardCliente(l) {
+    const v = this._vendidas(l), total = l.total_cotas, pct = total ? Math.round(v/total*100) : 0;
+    const lt = LOTERIAS[l.loteria], minha = this._minhaCota(l);
+    const metade = v >= Math.ceil(total/2) && v < total;
+    return '<div class="lote-card">' +
+      '<div class="fxb">' +
+        '<div><div class="lote-nome">' + this._esc(l.nome) + '</div><div class="muted txs">' + (lt?lt.emoji+' '+lt.nome:'') + ' · ' + fmt$(l.valor_cota) + '/cota</div></div>' +
+        '<div class="lote-cd"><div class="lote-cd-n" id="cd-' + l.id + '">' + this._fmtMMSS(this._restanteMs(l)) + '</div><div class="txs muted">restante</div></div>' +
+      '</div>' +
+      '<div class="cota-msg">👉 Escolha sua cota antes que acabe o tempo ou as cotas!</div>' +
+      '<div class="lote-bar"><div class="lote-bar-fill" style="width:' + pct + '%"></div></div>' +
+      '<div class="fxb txs mb8"><span class="fw7">' + v + '/' + total + ' vendidas</span>' + (minha ? '<span class="badge txs" style="background:var(--primary);color:#000">Sua cota: #' + minha.numero + '</span>' : '') + '</div>' +
+      (metade ? '<div class="cota-hot">🔥 Corra! Já vendemos ' + v + '/' + total + ' — não fique de fora!</div>' : '') +
+      '<div class="cota-grid">' + (l.cotas||[]).map(c => this._cotaCliente(l, c, minha)).join('') + '</div>' +
+    '</div>';
+  },
+  _cotaCliente(l, c, minha) {
+    if (minha && minha.id === c.id) {
+      if (c.status==='reservada') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><button class="btn btn-p btn-sm cota-anexar" onclick="COTAS.anexar(\'' + c.id + '\')">📎 Anexar comprovante</button></div>';
+      if (c.status==='comprovante') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><div class="cota-badge">📎 Comprovante enviado ✓</div></div>';
+      if (c.status==='paga') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><div class="cota-badge">✅ Pago</div></div>';
+    }
+    if (c.status==='livre') return '<div class="cota ct-livre"><div class="cota-num">#' + c.numero + '</div><button class="btn btn-o btn-sm" onclick="COTAS.reservar(\'' + l.id + '\',\'' + c.id + '\')">Escolher</button></div>';
+    const nm = c.nome ? this._esc(c.nome.split(' ')[0]) : '—';
+    const pago = c.status==='comprovante' || c.status==='paga';
+    return '<div class="cota ' + (pago?'ct-paga':'ct-res') + '"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">' + nm + '</div><div class="cota-badge">' + (pago?'✅ Vendida':'⏳ Reservada') + '</div></div>';
+  },
+  reservar(loteId, cotaId) {
+    MODAL.open(
+      '<div class="sectt mb8">🎟️ Reservar cota</div>' +
+      '<div class="fg mb8"><label>Seu nome</label><input id="rsv-nome" value="' + this._esc(S.user?.nome||'') + '" placeholder="Seu nome"></div>' +
+      '<div class="fg mb8"><label>WhatsApp (opcional)</label><input id="rsv-fone" placeholder="(61) 9...."></div>' +
+      '<button class="btn btn-p btn-f" onclick="COTAS._confirmarReserva(\'' + loteId + '\',\'' + cotaId + '\')">Reservar minha cota</button>' +
+      '<div class="txs muted mt8">Depois de pagar, volte aqui e anexe o comprovante na sua cota.</div>'
+    );
+  },
+  async _confirmarReserva(loteId, cotaId) {
+    const nome = $('rsv-nome').value.trim(), fone = $('rsv-fone').value.trim();
+    if (!nome) { TOAST.show('Digite seu nome.', 'err'); return; }
+    const r = await _api.post('/api/cotas/' + cotaId + '/reservar', { nome, fone });
+    if (!r) { TOAST.show('Erro de conexão. Tente de novo.', 'err'); return; }
+    const data = await r.json().catch(() => ({}));
+    if (!data.ok) { TOAST.show(data.error||'Essa cota já foi reservada. Escolha outra.', 'err'); MODAL.close(); await this._carregar(); this._renderCliente(); return; }
+    this._guardarMinha(loteId, cotaId);
+    if (S.user) S.user.nome = nome;
+    MODAL.close();
+    await this._carregar(); this._renderCliente();
+    TOAST.show('✅ Cota reservada! Agora pague e anexe o comprovante.', 'ok');
+  },
+  anexar(cotaId) {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = e => {
+      const f = e.target.files[0]; if (!f) return;
+      const rd = new FileReader();
+      rd.onload = async ev => {
+        this._busy = true;
+        const r = await _api.post('/api/cotas/' + cotaId + '/comprovante', { img: ev.target.result });
+        this._busy = false;
+        if (!r) { TOAST.show('Erro ao enviar. Tente de novo.', 'err'); return; }
+        const data = await r.json().catch(() => ({}));
+        if (!data.ok) { TOAST.show(data.error||'Reserve a cota antes de anexar.', 'err'); return; }
+        await this._carregar(); this._renderCliente();
+        TOAST.show('✅ Comprovante enviado! Aguarde a confirmação do lotérico.', 'ok');
+      };
+      rd.readAsDataURL(f);
+    };
+    inp.click();
+  },
+
+  // Banner no Início do cliente quando ha lote ativo
+  async checarBannerHome() {
+    const l = await _api.get('/api/lotes'); if (!Array.isArray(l)) return;
+    const ativos = l.filter(x => x.status==='ativo' && new Date(x.expira_em).getTime() > Date.now());
+    if (!ativos.length) return;
+    const home = $('view-home'); if (!home || S.tela !== 'home') return;
+    if ($('cota-banner-home')) return;
+    const b = document.createElement('div');
+    b.id = 'cota-banner-home'; b.className = 'cota-banner'; b.onclick = () => R.ir('cotas');
+    b.innerHTML = '🎟️ <strong>' + ativos.length + ' bolão(ões) com cotas abertas agora!</strong> Toque para escolher a sua antes que esgote. ⏳';
+    home.insertBefore(b, home.firstChild);
   },
 };
 
