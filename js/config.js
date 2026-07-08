@@ -16,7 +16,7 @@ const LOTERIAS = {
   lotomania:     { id:'lotomania',     nome:'Lotomania',    emoji:'🍀', dezenas:20, max:100, preco:3.00, cor:'#f78100', cor2:'#7a3e00', api:'lotomania',     dias:'Segunda e Quinta' },
   timemania:     { id:'timemania',     nome:'Timemania',    emoji:'🍀', dezenas:10, max:80,  preco:3.50, cor:'#cddc00', cor2:'#6e7500', corTexto:'#1a5c2e', api:'timemania',     dias:'Ter, Qui e Sáb' },
   duplasena:     { id:'duplasena',     nome:'Dupla Sena',   emoji:'🍀', dezenas:6,  max:50,  preco:2.50, cor:'#a01441', cor2:'#560a23', api:'duplasena',     dias:'Ter, Qui e Sáb' },
-  diadesorte:    { id:'diadesorte',    nome:'Dia de Sorte', emoji:'🍀', dezenas:7,  max:31,  preco:2.50, cor:'#cb852b', cor2:'#6b4514', corTexto:'#7a4a12', api:'diadesorte',    dias:'Terça e Sábado' },
+  diadesorte:    { id:'diadesorte',    nome:'Dia de Sorte', emoji:'🍀', dezenas:7,  max:31,  preco:2.50, cor:'#e0a83a', cor2:'#a06f1a', corTexto:'#4a2e08', api:'diadesorte',    dias:'Terça e Sábado' },
   loteca:        { id:'loteca',        nome:'Loteca',       emoji:'🍀', dezenas:14, max:3,   preco:2.00, cor:'#e30613', cor2:'#7a030a', api:'loteca',        dias:'Segunda',         palpite:true },
   maismilionaria:{ id:'maismilionaria',nome:'+Milionária',  emoji:'🍀', dezenas:6,  max:50,  preco:6.00, cor:'#2e2a6e', cor2:'#171533', api:'maismilionaria',dias:'Quarta e Sábado', trevos:2, trevoMax:6 },
   supersete:     { id:'supersete',     nome:'Super Sete',   emoji:'🍀', dezenas:7,  max:9,   preco:2.50, cor:'#7cb518', cor2:'#3f6b0c', corTexto:'#1a5c2e', api:'supersete',     dias:'Seg, Qua e Sex',  colunas:7 },
