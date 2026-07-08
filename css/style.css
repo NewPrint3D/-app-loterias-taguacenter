@@ -177,7 +177,7 @@ body {
 }
 .lt-card:hover { transform: scale(1.03); box-shadow: 0 8px 30px rgba(0,0,0,.5); }
 .lt-emoji { font-size: 2.1rem; position: absolute; top: 12px; right: 12px; }
-.lt-nome  { font-size: .95rem; font-weight: 800; color: #fff; }
+.lt-nome  { font-size: .95rem; font-weight: 800; color: var(--lt-txt, #fff); }
 .lt-dias  { font-size: .68rem; color: rgba(255,255,255,.75); margin-top: 3px; }
 .lt-cnt   { font-size: .68rem; color: rgba(255,255,255,.9);  margin-top: 8px; font-weight: 600; }
 
@@ -462,9 +462,9 @@ input:checked + .sl2::before { transform: translateX(19px); }
 .lt-dados-live { min-height: 18px; margin-bottom: 4px; display: flex; flex-direction: column; gap: 2px; padding-right: 48px; }
 .lt-acum       { display: inline-block; background: rgba(239,68,68,.85); color:#fff; font-size:.58rem;
                  font-weight:800; border-radius:4px; padding:1px 5px; letter-spacing:.5px; text-transform:uppercase; width:fit-content; }
-.lt-premio     { font-size: .85rem; font-weight: 800; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.5); line-height: 1.1; }
-.lt-premio-ext { font-size: .58rem; color: rgba(255,255,255,.8); margin-top: 1px; line-height: 1.3; }
-.lt-data-card  { font-size: .62rem; color: rgba(255,255,255,.82); margin-top: 2px; }
+.lt-premio     { font-size: .85rem; font-weight: 800; color: var(--lt-txt, #fff); text-shadow: var(--lt-shadow, 0 1px 4px rgba(0,0,0,.5)); line-height: 1.1; }
+.lt-premio-ext { font-size: .58rem; color: var(--lt-txt, rgba(255,255,255,.8)); margin-top: 1px; line-height: 1.3; }
+.lt-data-card  { font-size: .62rem; color: var(--lt-txt, rgba(255,255,255,.82)); margin-top: 2px; }
 .lt-loading-dot{ width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,.4); animation:pulse .9s infinite alternate; }
 @keyframes pulse { from{opacity:.3} to{opacity:1} }
 
@@ -903,4 +903,7 @@ body[data-tema="independencia"] #faixa-tema::before {
 }
 .dur-opt input:checked + span { border-color: var(--gold); color: var(--gold); background: rgba(245,158,11,.12); }
 .grp-check { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-size: .86rem; cursor: pointer; }
-.grp-check input { width: 17px; height: 17px; accent-color: var(--primary); }
+
+/* Trevos da +Milionária (exibidos após as dezenas) */
+.bola-trevo { background: #1d9e4f; color: #fff; }
+.trevo-lbl  { font-size: .58rem; color: var(--muted); align-self: center; margin: 0 4px 0 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }

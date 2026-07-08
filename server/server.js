@@ -120,6 +120,7 @@ function paraFormatoCaixaBruto(d) {
     numero: d.concurso,
     dataApuracao: d.data,
     listaDezenas: d.dezenas,
+    listaTrevos: d.trevos || [],
     acumulado: !!d.acumulou,
     listaRateioPremio: (d.premiacoes || []).map(f => ({
       descricaoFaixa: f.descricao, faixa: f.faixa,

@@ -28,6 +28,11 @@ function fmtPremio(v, curto=false) {
   return fmt$(v);
 }
 const fmtN = n => (n||0).toLocaleString('pt-BR');
+// Trevos da +Milionária — bolinhas de trevo (1-6) exibidas após as dezenas, quando existirem.
+function trevosHTML(r) {
+  if (!r || !Array.isArray(r.trevos) || !r.trevos.length) return '';
+  return '<span class="trevo-lbl">🍀 trevos</span>' + r.trevos.map(t => '<span class="bola bola-trevo">' + String(t).padStart(2,'0') + '</span>').join('');
+}
 const uid  = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
 // Normaliza telefone para só dígitos, garantindo DDI 55 (ex: 5561999999999)
 function normalizarFone(raw) {
@@ -438,6 +443,7 @@ const API = {
   parse(r) {
     if (!r||!r.listaDezenas) return null;
     return { numero:r.numero, data:r.dataApuracao, dezenas:r.listaDezenas,
+      trevos:r.listaTrevos||[],
       acumulado:r.acumulado, ganhadores:r.listaRateioPremio?.[0]?.numeroDeGanhadores??0,
       premio:r.listaRateioPremio?.[0]?.valorPremio??0, prox:r.valorEstimadoProximoConcurso??0,
       dataProxConcurso:r.dataProximoConcurso||null, numProxConcurso:r.numeroConcursoProximo||null };
@@ -603,7 +609,7 @@ const R = {
       </div>
       <div class="grid-lt">
         ${Object.values(LOTERIAS).map(lt=>{
-          return`<div class="lt-card" style="background:linear-gradient(135deg,${lt.cor},${lt.cor2})" onclick="R._ltClick('${lt.id}')">
+          return`<div class="lt-card" style="background:linear-gradient(135deg,${lt.cor},${lt.cor2})${lt.corTexto?`;--lt-txt:${lt.corTexto};--lt-shadow:none`:''}" onclick="R._ltClick('${lt.id}')">
             <span class="lt-emoji">${lt.emoji}</span>
             <div id="ld-${lt.id}" class="lt-dados-live"><div class="lt-loading-dot"></div></div>
             <div class="lt-nome">${lt.nome}</div>
@@ -663,7 +669,7 @@ const R = {
       <div class="grid-lt mb4">
         ${Object.values(LOTERIAS).map(lt=>`
           <div class="lt-card ${lt.id===S._hLt?'lt-sel':''}" id="ltc-${lt.id}"
-               style="background:linear-gradient(135deg,${lt.cor},${lt.cor2})"
+               style="background:linear-gradient(135deg,${lt.cor},${lt.cor2})${lt.corTexto?`;--lt-txt:${lt.corTexto};--lt-shadow:none`:''}"
                onclick="R._hSel('${lt.id}')">
             <span class="lt-emoji">${lt.emoji}</span>
             <div id="ld-${lt.id}" class="lt-dados-live"><div class="lt-loading-dot"></div></div>
@@ -726,7 +732,7 @@ const R = {
           <span>${r.data||'—'}</span>
         </div>
         <div class="bolas">
-          ${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}
+          ${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}
         </div>
         <div class="hres-info">
           ${r.acumulado
@@ -854,7 +860,7 @@ const R = {
       ${dados.slice(0,3).map(r=>`
         <div class="res-card">
           <div class="res-top"><span>Concurso #${r.numero||r.concurso||'—'}</span><span>${r.data||'—'}</span></div>
-          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}</div>
+          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}</div>
           <div class="fxb txs muted mt8">
             <span>${r.acumulado?'<span class="badge b-acum">Acumulado!</span>':`${r.ganhadores??0} ganhador${r.ganhadores!==1?'es':''}`}</span>
             <span>${r.premio?fmtPremio(r.premio):''}</span>
@@ -1233,7 +1239,7 @@ const R = {
         </div>
         <div class="divider"></div>
         <div class="sectt">Jogos do bolão</div>
-        ${b.numeros.map((ns,i)=>`<div class="mb8"><div class="txs muted mb8">Jogo ${i+1}${res?` · ${res.jogos[i]?.acertos??0} acerto${(res.jogos[i]?.acertos??0)!==1?'s':''}`:''}</div><div class="bolas">${ns.map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}</div></div>`).join('')}
+        ${b.numeros.map((ns,i)=>`<div class="mb8"><div class="txs muted mb8">Jogo ${i+1}${res?` · ${res.jogos[i]?.acertos??0} acerto${(res.jogos[i]?.acertos??0)!==1?'s':''}`:''}</div><div class="bolas">${ns.map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}</div></div>`).join('')}
       </div>
       ${res?`
       <div class="card mb12" style="border:2px solid ${res.premiado?'var(--gold)':'var(--border)'}">
@@ -1273,7 +1279,7 @@ const R = {
       ${dados.slice(0,3).map((r,i)=>`
         <div class="res-card">
           <div class="res-top"><span>Concurso #${r.numero||r.concurso||'—'}</span><span>${r.data||'—'}</span></div>
-          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}</div>
+          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}</div>
           <div class="fxb txs muted mt8">
             <span>${r.acumulado?'<span class="badge b-acum">Acumulado!</span>':`${r.ganhadores??0} ganhador${r.ganhadores!==1?'es':''}`}</span>
             <span>${r.premio?fmtPremio(r.premio):''}</span>
@@ -1337,7 +1343,7 @@ const R = {
       data.map(({lt,r})=>!r?'':
         `<div class="card mb12" style="border-left:4px solid ${lt.cor}">
           <div class="fxb mb8"><div style="font-weight:700">${lt.emoji} ${lt.nome}</div><div class="txs muted">Conc. #${r.numero||'—'} · ${r.data||'—'}</div></div>
-          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}</div>
+          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}</div>
           <div class="fxb txs muted mt8">
             <span>${r.acumulado?'🔴 Acumulado':`${r.ganhadores??0} ganhador${r.ganhadores!==1?'es':''}`}</span>
           </div>
