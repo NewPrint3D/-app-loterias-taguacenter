@@ -691,37 +691,47 @@ pool.query(`CREATE TABLE IF NOT EXISTS wpp_cadastros (
 // Status da cota: 'livre' -> 'reservada' (so nome) -> 'comprovante' (anexou, verde p/ cliente,
 // conta no X/N) -> 'paga' (admin conferiu e confirmou manualmente).
 // Status do lote: 'ativo' -> 'esgotado' (100% com comprovante) ou 'encerrado' (tempo esgotou).
-pool.query(`CREATE TABLE IF NOT EXISTS lotes (
-  id TEXT PRIMARY KEY,
-  bolao_id TEXT,
-  loteria TEXT DEFAULT '',
-  nome TEXT DEFAULT 'Bolao',
-  concurso INTEGER DEFAULT 0,
-  total_cotas INTEGER NOT NULL,
-  valor_cota NUMERIC DEFAULT 0,
-  duracao_min INTEGER DEFAULT 10,
-  inicia_em TIMESTAMPTZ DEFAULT NOW(),
-  expira_em TIMESTAMPTZ,
-  status TEXT DEFAULT 'ativo',
-  grupos JSONB DEFAULT '[]',
-  aviso50 BOOLEAN DEFAULT false,
-  aviso_esgotado BOOLEAN DEFAULT false,
-  espera JSONB DEFAULT '[]',
-  criado TIMESTAMPTZ DEFAULT NOW()
-)`).catch(() => {});
-pool.query(`CREATE TABLE IF NOT EXISTS cotas (
-  id TEXT PRIMARY KEY,
-  lote_id TEXT REFERENCES lotes(id) ON DELETE CASCADE,
-  numero INTEGER,
-  status TEXT DEFAULT 'livre',
-  nome TEXT DEFAULT '',
-  fone TEXT DEFAULT '',
-  comprovante TEXT,
-  reservada_em TIMESTAMPTZ,
-  pago_em TIMESTAMPTZ,
-  criado TIMESTAMPTZ DEFAULT NOW()
-)`).catch(() => {});
-pool.query(`CREATE INDEX IF NOT EXISTS idx_cotas_lote ON cotas(lote_id)`).catch(() => {});
+// IMPORTANTE: criar em ORDEM e com await — a tabela `cotas` tem FK para `lotes`, então `lotes`
+// precisa existir ANTES. Antes eram 3 pool.query() em paralelo com .catch(() => {}) engolindo o
+// erro: a `cotas` corria antes da `lotes` existir, falhava calada, e /api/lotes dava 500.
+(async () => {
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS lotes (
+      id TEXT PRIMARY KEY,
+      bolao_id TEXT,
+      loteria TEXT DEFAULT '',
+      nome TEXT DEFAULT 'Bolao',
+      concurso INTEGER DEFAULT 0,
+      total_cotas INTEGER NOT NULL,
+      valor_cota NUMERIC DEFAULT 0,
+      duracao_min INTEGER DEFAULT 10,
+      inicia_em TIMESTAMPTZ DEFAULT NOW(),
+      expira_em TIMESTAMPTZ,
+      status TEXT DEFAULT 'ativo',
+      grupos JSONB DEFAULT '[]',
+      aviso50 BOOLEAN DEFAULT false,
+      aviso_esgotado BOOLEAN DEFAULT false,
+      espera JSONB DEFAULT '[]',
+      criado TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS cotas (
+      id TEXT PRIMARY KEY,
+      lote_id TEXT REFERENCES lotes(id) ON DELETE CASCADE,
+      numero INTEGER,
+      status TEXT DEFAULT 'livre',
+      nome TEXT DEFAULT '',
+      fone TEXT DEFAULT '',
+      comprovante TEXT,
+      reservada_em TIMESTAMPTZ,
+      pago_em TIMESTAMPTZ,
+      criado TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_cotas_lote ON cotas(lote_id)`);
+    console.log('Tabelas de Cotas ao Vivo (lotes/cotas) prontas.');
+  } catch (e) {
+    console.error('ERRO criando tabelas de cotas ao vivo:', e.message);
+  }
+})();
 
 async function pgAuthState() {
   await pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`);
