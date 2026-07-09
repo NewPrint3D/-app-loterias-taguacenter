@@ -164,7 +164,11 @@ const FONTES_EXIBICAO = [
       const r = await fetch(url, { headers: CAIXA_HEADERS, signal: AbortSignal.timeout(CAIXA_TIMEOUT_MS_EXIBICAO) });
       if (!r.ok) return null;
       const d = await r.json();
-      return (d && Array.isArray(d.listaDezenas) && d.listaDezenas.length) ? d : null;
+      if (!d) return null;
+      if (Array.isArray(d.listaDezenas) && d.listaDezenas.length) return d;
+      // Loteca não tem dezenas — tem a lista de jogos (times + placar). Aceita se vier o resultado esportivo.
+      if (Array.isArray(d.listaResultadoEquipeEsportiva) && d.listaResultadoEquipeEsportiva.length) return d;
+      return null;
     },
   },
 ];
