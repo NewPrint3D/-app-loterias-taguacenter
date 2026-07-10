@@ -2333,7 +2333,7 @@ const R = {
   },
   _confirmarPremiacao(id) {
     DB.premiacoes.confirmar(id);
-    R._premios();
+    if (S.tela === 'premios') R._premios(); // só re-renderiza a tela de premiações se for ela que está aberta
     $('h-premio')?.classList.toggle('h-premio-pend', DB.premiacoes.minhas().some(p=>!p.confirmada));
     TOAST.show('🎉 Premiação confirmada!', 'ok');
   },
