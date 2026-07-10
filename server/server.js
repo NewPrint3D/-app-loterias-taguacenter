@@ -44,15 +44,17 @@ const assinarToken = role => jwt.sign({ role }, JWT_SECRET, { expiresIn: JWT_EXP
 
 // Rotas de escrita usadas por quem não tem login (cliente sem senha) — ficam de fora do gate.
 // Toda rota pública nova precisa ser adicionada aqui E comentada no próprio app.post/put dela.
-const ROTAS_ESCRITA_PUBLICAS = new Set(['/api/auth/login', '/api/pagamentos', '/api/config/log']);
+const ROTAS_ESCRITA_PUBLICAS = new Set(['/api/auth/login', '/api/pagamentos', '/api/config/log', '/api/usuarios/registrar']);
 
-// Cliente (nome+grupo, sem token) reserva a cota e anexa o comprovante -- essas duas rotas de
+// Cliente (nome+telefone, sem token) reserva a cota e anexa o comprovante -- essas duas rotas de
 // cota precisam ficar publicas. Reservar e atomico (so pega se estiver 'livre') e anexar so
 // funciona numa cota ja reservada, entao abrir nao deixa ninguem marcar cota como paga (isso e
-// rota protegida /confirmar).
+// rota protegida /confirmar). Confirmar premiacao tambem e publica pelo mesmo motivo (cliente sem
+// token) -- so marca confirmada=true numa premiacao ja existente, nao cria nem altera valor.
 function ehRotaEscritaPublica(path) {
   if (ROTAS_ESCRITA_PUBLICAS.has(path)) return true;
   if (/^\/api\/cotas\/[^/]+\/(reservar|comprovante)$/.test(path)) return true;
+  if (/^\/api\/premiacoes\/[^/]+\/confirmar$/.test(path)) return true;
   return false;
 }
 
@@ -578,9 +580,62 @@ app.post('/api/usuarios', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// PÚBLICA (em ehRotaEscritaPublica) — cliente sem token se auto-registra no login (id determinístico
+// 'ap_'+fone, mesmo apostador em qualquer aparelho cai na mesma linha). Upsert restrito só a
+// nome/fone/ativo=true — diferente da rota admin acima, não aceita desativar nem mexer em mais nada.
+app.post('/api/usuarios/registrar', async (req, res) => {
+  const { id, nome, fone, criado } = req.body;
+  if (!id || !nome || !fone) return res.status(400).json({ ok: false, error: 'Dados incompletos.' });
+  try {
+    await pool.query(
+      `INSERT INTO usuarios(id,nome,ativo,criado,fone) VALUES($1,$2,true,$3,$4)
+       ON CONFLICT(id) DO UPDATE SET nome=$2,fone=$4`,
+      [id, String(nome).trim().slice(0, 80), criado||'', normalizarFoneServidor(fone)]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 app.delete('/api/usuarios/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM usuarios WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- PREMIAÇÃO ----
+app.get('/api/premiacoes', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM premiacoes ORDER BY criado DESC');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Admin cadastra o prêmio de um apostador (por telefone) — força confirmada=false no servidor
+// independente do corpo, mesmo padrão defensivo de POST /api/pagamentos.
+app.post('/api/premiacoes', async (req, res) => {
+  const { id, nome, fone, valor, mensagem } = req.body;
+  if (!nome || !fone) return res.status(400).json({ ok: false, error: 'Informe nome e telefone.' });
+  try {
+    await pool.query(
+      `INSERT INTO premiacoes(id,nome,fone,valor,mensagem,confirmada,criado) VALUES($1,$2,$3,$4,$5,false,NOW())`,
+      [id, String(nome).trim().slice(0, 80), normalizarFoneServidor(fone), +valor || 0, mensagem || '']
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// PÚBLICA (em ehRotaEscritaPublica) — o apostador premiado (sem token) confirma que viu o prêmio.
+app.put('/api/premiacoes/:id/confirmar', async (req, res) => {
+  try {
+    await pool.query(`UPDATE premiacoes SET confirmada=true, confirmada_em=NOW() WHERE id=$1`, [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.delete('/api/premiacoes/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM premiacoes WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -741,6 +796,19 @@ const _migracaoCotasAoVivo = (async () => {
     console.error('ERRO criando tabelas de cotas ao vivo:', e.message);
   }
 })();
+
+// Casamento apostador->premiação é por telefone normalizado (fone), não por nome — mesmo
+// identificador estável usado no login (S.user.fone). nome fica só pra exibição no painel do admin.
+const _migracaoPremiacoes = pool.query(`CREATE TABLE IF NOT EXISTS premiacoes (
+  id TEXT PRIMARY KEY,
+  nome TEXT NOT NULL,
+  fone TEXT NOT NULL,
+  valor NUMERIC DEFAULT 0,
+  mensagem TEXT DEFAULT '',
+  confirmada BOOLEAN DEFAULT false,
+  confirmada_em TIMESTAMPTZ,
+  criado TIMESTAMPTZ DEFAULT NOW()
+)`).catch(e => console.error('ERRO criando tabela premiacoes:', e.message));
 
 async function pgAuthState() {
   await pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`);
@@ -1641,6 +1709,6 @@ app.post('/api/resultados/relay', async (req, res) => {
 
 // Só aceita conexões depois que a migração crítica (grupo_id) terminar — elimina a janela onde
 // uma requisição POST /api/boloes podia chegar antes da coluna existir de verdade no banco.
-Promise.all([_migracaoGrupoId, _migracaoCotasAoVivo]).finally(() => {
+Promise.all([_migracaoGrupoId, _migracaoCotasAoVivo, _migracaoPremiacoes]).finally(() => {
   app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));
 });

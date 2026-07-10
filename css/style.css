@@ -464,6 +464,23 @@ body {
 .m-title { font-size: 1.08rem; font-weight: 700; margin-bottom: 16px; }
 @keyframes m-up { from{transform:translateY(40px);opacity:0} to{transform:none;opacity:1} }
 
+/* ---- PREMIAÇÃO: FOGOS DE ARTIFÍCIO ---- */
+.fogos { position: relative; height: 0; }
+.fogos-particula {
+  position: absolute; top: 0; left: 50%; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--c); transform: rotate(var(--a)) translateY(0); opacity: 0;
+  animation: fogos-estourar 1.1s ease-out .1s 1;
+}
+@keyframes fogos-estourar {
+  0%   { opacity: 1; transform: rotate(var(--a)) translateY(0) scale(1); }
+  100% { opacity: 0; transform: rotate(var(--a)) translateY(-90px) scale(.4); }
+}
+#h-premio.h-premio-pend { position: relative; }
+#h-premio.h-premio-pend::after {
+  content: ''; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--red); box-shadow: 0 0 0 2px var(--bg);
+}
+
 /* ---- BLOQUEIO ---- */
 .bl-inner { text-align: center; padding: 32px 24px; }
 .bl-icon  { font-size: 4rem; margin-bottom: 16px; }

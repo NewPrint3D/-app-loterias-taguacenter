@@ -194,10 +194,10 @@ const _api = {
 };
 
 async function carregarDados() {
-  const [boloes,grupos,vendas,pags,usuarios,ctrl,grupoMembros] = await Promise.all([
+  const [boloes,grupos,vendas,pags,usuarios,ctrl,grupoMembros,premiacoes] = await Promise.all([
     _api.get('/api/boloes'), _api.get('/api/grupos'), _api.get('/api/vendas'),
     _api.get('/api/pagamentos'), _api.get('/api/usuarios'), _api.get('/api/config'),
-    _api.get('/api/grupo_membros'),
+    _api.get('/api/grupo_membros'), _api.get('/api/premiacoes'),
   ]);
   // PostgreSQL retorna NUMERIC como string — converter para number
   if (Array.isArray(boloes))   S.cache.boloes   = boloes.map(b => ({
@@ -213,6 +213,7 @@ async function carregarDados() {
   if (Array.isArray(usuarios)) S.cache.usuarios = usuarios;
   if (ctrl && ctrl.id)         S.cache.ctrl     = ctrl;
   if (Array.isArray(grupoMembros)) S.cache.grupoMembros = grupoMembros;
+  if (Array.isArray(premiacoes)) S.cache.premiacoes = premiacoes.map(p => ({ ...p, valor: +p.valor||0 }));
 }
 
 // Um bolão pertence a um grupo só se o grupo_id bater (vínculo de verdade).
@@ -268,6 +269,17 @@ const DB = {
     find: nm  => (S.cache.usuarios||[]).find(u=>u.nome.toLowerCase()===nm.toLowerCase()),
     save: u   => { const l=S.cache.usuarios; const i=l.findIndex(x=>x.id===u.id); i>=0?l[i]=u:l.push(u); _api.post('/api/usuarios',u); },
     del:  id  => { S.cache.usuarios=S.cache.usuarios.filter(u=>u.id!==id); _api.del('/api/usuarios/'+id); },
+  },
+  premiacoes: {
+    list: ()  => S.cache.premiacoes || [],
+    minhas: () => (S.cache.premiacoes||[]).filter(p => p.fone === S.user?.fone),
+    save: p   => { S.cache.premiacoes.unshift(p); _api.post('/api/premiacoes',p); },
+    // Confirmar é rota própria pública (o apostador não tem token) — a de criação é protegida (admin).
+    confirmar: id => {
+      const p = S.cache.premiacoes.find(x=>x.id===id); if (p) { p.confirmada=true; p.confirmada_em=new Date().toISOString(); }
+      _api.put(`/api/premiacoes/${id}/confirmar`);
+    },
+    del:  id  => { S.cache.premiacoes=S.cache.premiacoes.filter(p=>p.id!==id); _api.del('/api/premiacoes/'+id); },
   },
   ctrl: {
     get: ()  => S.cache.ctrl || { bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] },
@@ -374,7 +386,7 @@ const AUTH = {
       fone = normalizarFone(digitado);
     }
     AUTH._lembrarApostador(nome, fone);
-    _api.post('/api/usuarios', { id:'ap_'+fone, nome, ativo:true, criado:hoje(), fone });
+    _api.post('/api/usuarios/registrar', { id:'ap_'+fone, nome, criado:hoje(), fone });
     S.user = { role:'cliente', nome, fone };
     AUTH._start();
   },
@@ -410,11 +422,13 @@ const AUTH = {
     const isAdmin = AUTH.isAdmin();
     $('nav-user').hidden  = isAdmin;
     $('nav-admin').hidden = !isAdmin;
+    $('h-premio').hidden  = isAdmin;
 
     DB.ctrl.log('Login: ' + (S.user.nome||S.user.login));
     ZE.start();
     R.ir('home');
     R._verificarPremios();
+    R._verificarPremiacaoCliente();
     RELAY.verificarPendentes();
     AUTH._iniciarPollingResultados();
   },
@@ -442,6 +456,7 @@ const AUTH = {
     $('shell').hidden = true;
     $('nav-user').hidden = true;
     $('nav-admin').hidden = true;
+    $('h-premio').hidden = true;
     $('tela-login').hidden = false;
     $('inp-nome').value = '';
     $('inp-p').value = '';
@@ -1061,6 +1076,25 @@ const R = {
     localStorage.setItem('premiosVistos', JSON.stringify([...vistos].slice(-500)));
     MODAL.close();
   },
+  // Fogos de artifício automáticos pro apostador quando o admin cadastra uma premiação — só cliente
+  // (diferente de _verificarPremios acima, que é admin-only). Uma premiação por vez; ao confirmar,
+  // mostra a próxima pendente se houver mais.
+  _verificarPremiacaoCliente() {
+    if (AUTH.isAdmin()) return;
+    const pendente = DB.premiacoes.minhas().find(p => !p.confirmada);
+    $('h-premio')?.classList.toggle('h-premio-pend', !!pendente);
+    if (!pendente) { MODAL.close(); return; }
+    MODAL.open(`
+      <div class="fogos">${Array.from({length:10}).map((_,i)=>`<span class="fogos-particula" style="--a:${i*36}deg;--c:${['var(--gold)','var(--primary)','var(--red)','#fff'][i%4]}"></span>`).join('')}</div>
+      <div class="tc">
+        <div style="font-size:2.4rem">🎉</div>
+        <div class="m-title" style="margin-bottom:6px">Confirme sua premiação!</div>
+        <div style="font-size:1.6rem;font-weight:800;color:var(--gold)">${fmt$(pendente.valor)}</div>
+        ${pendente.mensagem?`<div class="txs muted mt8">${COTAS._esc(pendente.mensagem)}</div>`:''}
+        <button class="btn btn-p btn-f mt16" onclick="R._confirmarPremiacao('${pendente.id}');R._verificarPremiacaoCliente();">Confirmar 🎉</button>
+      </div>
+    `);
+  },
   _delBolao(id, nome) {
     if(!confirm(`Excluir o bolão "${nome}"?\n\nTodos os membros e pagamentos vinculados também serão removidos. Esta ação não pode ser desfeita.`)) return;
     DB.boloes.del(id); R._boloes();
@@ -1500,6 +1534,7 @@ const R = {
         <div class="amenu-c" style="border-color:var(--gold)" onclick="R.ir('lotes')"><span class="amenu-i">🎟️</span><div class="amenu-n">Cotas ao Vivo</div></div>
         <div class="amenu-c" onclick="R.ir('boloes')"><span class="amenu-i">🎲</span><div class="amenu-n">Bolões</div></div>
         <div class="amenu-c" onclick="R.ir('usuarios')"><span class="amenu-i">👥</span><div class="amenu-n">Usuários <span style="font-size:.65rem;background:var(--primary);color:#000;border-radius:10px;padding:1px 5px;margin-left:2px">${qtUsr}</span></div></div>
+        <div class="amenu-c" onclick="R.ir('premiacao')"><span class="amenu-i">🏆</span><div class="amenu-n">Premiação</div></div>
         ${isdev?`<div class="amenu-c" style="border-color:var(--red)" onclick="R.ir('controle')"><span class="amenu-i">🔒</span><div class="amenu-n" style="color:var(--red)">Controle Dev</div></div>`:''}
       </div>
       ${TEMA.renderSeletor()}`;
@@ -1628,6 +1663,73 @@ const R = {
     novos.forEach(n => DB.usuarios.save({ id:uid(), nome:n.nome, ativo:true, criado:hoje(), fone:n.fone }));
     R._usuarios();
   },
+
+  // ---- PREMIAÇÃO (admin) ----
+  _premiacao() {
+    if(!AUTH.isAdmin()){R.ir('home');return;}
+    $('h-title').textContent='Premiação';
+    const lista = DB.premiacoes.list();
+    $('view-premiacao').innerHTML = `
+      <div class="fxb mb12">
+        <div class="sectt">Premiações (${lista.length})</div>
+        <button class="btn btn-p btn-sm" onclick="R._mNovaPremiacao()">+ Nova</button>
+      </div>
+      <div class="card">
+        ${!lista.length
+          ? '<div class="empty"><div class="ei">🏆</div><p>Nenhuma premiação cadastrada ainda.</p></div>'
+          : lista.map(p=>`
+          <div class="user-card">
+            <div class="user-avatar" style="background:${p.confirmada?'var(--primary)':'var(--gold)'}">🏆</div>
+            <div class="user-info">
+              <div class="user-nome">${p.nome}
+                <span class="badge txs" style="background:${p.confirmada?'var(--primary)':'var(--gold)'};color:#000;margin-left:6px">${p.confirmada?'✅ Confirmada':'⏳ Pendente'}</span>
+              </div>
+              <div class="user-meta txs muted">📱 ${p.fone} · ${fmt$(p.valor)}${p.mensagem?' · '+p.mensagem:''}</div>
+            </div>
+            <div class="user-acts"><button class="btn btn-d btn-sm" onclick="R._delPremiacao('${p.id}')">✕</button></div>
+          </div>`).join('')}
+      </div>`;
+  },
+  _mNovaPremiacao() {
+    const dl = DB.usuarios.list().map(u=>`<option value="${u.nome}">`).join('');
+    MODAL.open(`
+      <div class="m-title">🏆 Nova premiação</div>
+      <div class="fg mb8">
+        <label>Nome completo do apostador</label>
+        <input id="pr-nome" list="dl-apostadores" placeholder="Nome completo" oninput="R._premAutoFone(this.value)">
+        <datalist id="dl-apostadores">${dl}</datalist>
+      </div>
+      <div class="fg mb8"><label>Telefone (DDD)</label><input id="pr-fone" type="tel" placeholder="(61) 99999-9999"></div>
+      <div class="fg mb8"><label>Valor do prêmio (R$)</label><input id="pr-valor" type="number" step="0.01" placeholder="0,00"></div>
+      <div class="fg mb8"><label>Mensagem (opcional)</label><input id="pr-msg" placeholder="Ex: Acertou 4 dezenas na Lotofácil"></div>
+      <button class="btn btn-p btn-f mt8" onclick="R._salvarPremiacao()">🏆 Cadastrar premiação</button>
+      <div class="txs muted mt8">Se a pessoa ainda não abriu o app, a premiação fica pendente até ela entrar com esse nome + telefone pela primeira vez.</div>
+    `);
+  },
+  _premAutoFone(nome) {
+    const u = DB.usuarios.find((nome||'').trim());
+    if (u && u.fone) $('pr-fone').value = u.fone;
+  },
+  _salvarPremiacao() {
+    const nome = $('pr-nome').value.trim();
+    const foneDigitado = $('pr-fone').value.trim();
+    const valor = +$('pr-valor').value || 0;
+    const mensagem = $('pr-msg').value.trim();
+    if (!nome) { TOAST.show('Informe o nome do apostador.', 'err'); return; }
+    if (foneDigitado.replace(/\D/g,'').length < 10) { TOAST.show('Informe um telefone válido com DDD.', 'err'); return; }
+    if (valor <= 0) { TOAST.show('Informe o valor do prêmio.', 'err'); return; }
+    const fone = normalizarFone(foneDigitado);
+    DB.premiacoes.save({ id:uid(), nome, fone, valor, mensagem, confirmada:false, criado:hoje() });
+    MODAL.close();
+    R._premiacao();
+    TOAST.show('🏆 Premiação cadastrada!', 'ok');
+  },
+  _delPremiacao(id) {
+    if (!confirm('Excluir essa premiação?')) return;
+    DB.premiacoes.del(id);
+    R._premiacao();
+  },
+
   async _importarWA(grupoId, jid) {
     MODAL.open(`<div class="m-title">📱 Importar do WhatsApp</div><div class="loading mt16"><div class="spinner"></div></div><p class="tc muted mt8">Buscando participantes...</p>`);
     try {
@@ -2204,6 +2306,36 @@ const R = {
       concurso:parseInt($('mbc')?.value)||0,status:'ativo',membros:[],
       numeros:nums.length?[nums]:[],criado:hoje()});
     MODAL.close(); R.ir('boloes');
+  },
+
+  // ---- PREMIAÇÃO (cliente) ----
+  _premios() {
+    if (AUTH.isAdmin()) { R.ir('home'); return; }
+    $('h-title').textContent='Premiação';
+    const minhas = DB.premiacoes.minhas().sort((a,b)=>(b.criado||'').localeCompare(a.criado||''));
+    $('view-premios').innerHTML = `
+      <div class="tc mb16">
+        <div style="font-size:2.6rem">🏆</div>
+        <div style="font-size:1.1rem;font-weight:700;margin-top:6px">${COTAS._esc(S.user.nome)}</div>
+        <div class="muted txs mt4">📱 ${COTAS._esc(S.user.fone)}</div>
+      </div>
+      ${!minhas.length
+        ? '<div class="empty"><div class="ei">🏆</div><p>Nenhuma premiação por aqui ainda.</p><p class="txs muted">Quando você ganhar algum prêmio, ele aparece nesta tela.</p></div>'
+        : minhas.map(p=>`
+        <div class="lote-card">
+          <div class="fxb">
+            <div><div class="lote-nome">${fmt$(p.valor)}</div><div class="muted txs">${p.mensagem?COTAS._esc(p.mensagem):'Premiação'} · ${p.criado||''}</div></div>
+            ${p.confirmada
+              ? '<span class="badge txs" style="background:var(--primary);color:#000">✅ Confirmada</span>'
+              : `<button class="btn btn-p btn-sm" onclick="R._confirmarPremiacao('${p.id}')">Confirmar 🎉</button>`}
+          </div>
+        </div>`).join('')}`;
+  },
+  _confirmarPremiacao(id) {
+    DB.premiacoes.confirmar(id);
+    R._premios();
+    $('h-premio')?.classList.toggle('h-premio-pend', DB.premiacoes.minhas().some(p=>!p.confirmada));
+    TOAST.show('🎉 Premiação confirmada!', 'ok');
   },
 
   // ---- PERFIL ----
