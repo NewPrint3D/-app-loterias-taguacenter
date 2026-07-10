@@ -4,7 +4,7 @@ App de gestão de bolões para lotérica física (Taguacenter, Brasília).
 Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreSQL.
 Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
-**Estado em: 06/07/2026**
+**Estado em: 09/07/2026**
 
 ## Como rodar localmente
 
@@ -53,15 +53,56 @@ server/schema.sql   — schema das tabelas Neon (referência)
 
 ## Loterias suportadas
 
-| Loteria       | Dezenas | Max | Preço  | Dias |
-|--------------|---------|-----|--------|------|
-| Mega-Sena    | 6       | 60  | R$5,00 | Quarta e Sábado* |
-| Quina        | 5       | 80  | R$2,50 | Segunda a Sábado* |
-| Lotofácil    | 15      | 25  | R$3,00 | Segunda a Sábado* |
-| Lotomania    | 20      | 100 | R$3,00 | Segunda e Quinta* |
-| Timemania    | 10      | 80  | R$3,50 | Ter, Qui e Sáb* |
-| Dupla Sena   | 6       | 50  | R$2,50 | Ter, Qui e Sáb* |
-| Dia de Sorte | 7       | 31  | R$2,50 | Terça e Sábado* |
+| Loteria       | Dezenas | Max | Preço  | Formato especial |
+|--------------|---------|-----|--------|------------------|
+| Mega-Sena    | 6       | 60  | R$5,00 | — |
+| Quina        | 5       | 80  | R$2,50 | — |
+| Lotofácil    | 15      | 25  | R$3,00 | — |
+| Lotomania    | 20      | 100 | R$3,00 | — |
+| Timemania    | 10      | 80  | R$3,50 | — |
+| Dupla Sena   | 6       | 50  | R$2,50 | — |
+| Dia de Sorte | 7       | 31  | R$2,50 | — |
+| **Loteca**   | 14      | 3   | R$2,00 | 14 jogos de futebol, palpite 1/X/2 (`palpite:true`) |
+| **+Milionária** | 6    | 50  | R$6,00 | 6 dezenas + 2 trevos 1-6 (`trevos:2`) |
+| **Super Sete**  | 7    | 9   | R$2,50 | 7 colunas, dígitos 0-9 (`colunas:7`) |
+
+> As 3 últimas (Loteca, +Milionária, Super Sete) foram adicionadas em **09/07/2026** — detalhes logo abaixo.
+
+## Loterias — visual oficial da Caixa + formatos especiais (09/07/2026)
+
+Padronização visual seguindo as cores oficiais das Loterias Caixa e inclusão das 3 loterias que faltavam.
+
+- **Cores oficiais da Caixa** em `js/config.js` (`cor` = base do card, `cor2` = tom escuro do degradê):
+  Mega-Sena verde, Quina indigo, Lotofácil roxo, Lotomania laranja, Timemania amarelo-limão, Dupla
+  Sena cranberry, Dia de Sorte dourado, Loteca vermelho, +Milionária indigo escuro, Super Sete verde.
+- **Ícone = trevo multicolorido** (marca das Loterias Caixa) — SVG `TREVO_SVG(size)` em `js/app.js`
+  (4 folhas em coração: azul/verde/laranja/amarelo, com caule). Substitui o emoji nos cards da Home.
+  Nos dropdowns/textos inline ainda usa o emoji 🍀 (SVG não renderiza dentro de `<option>`).
+- **Cor do texto por loteria** (campo `corTexto` no config → variável CSS `--lt-txt`): cards de fundo
+  claro usam texto escuro — Super Sete e Timemania verde-escuro (`#1a5c2e`), Dia de Sorte marrom
+  (`#4a2e08`). Os demais usam branco (padrão via `var(--lt-txt, #fff)`).
+- **Formatos especiais no resultado:**
+  - **Super Sete** — a API retorna 7 dígitos em `dezenas` → 7 bolinhas (0-9). Vem pela cadeia normal (loteriascaixa-api).
+  - **+Milionária** — 6 dezenas + 2 trevos. O backend preserva `listaTrevos` em `paraFormatoCaixaBruto`;
+    o front (`API.parse`) mapeia `trevos` e `trevosHTML(r)` exibe os trevos (verdes) após as dezenas.
+  - **Loteca** — 14 jogos de futebol (times + placar), palpite **1/X/2** derivado do placar (casa
+    venceu = 1, empate = X, fora venceu = 2). Helper `jogosHTML(r)`. Ver integração abaixo.
+
+### Loteca — busca direto da Caixa pelo navegador (09/07/2026)
+
+A Loteca **só existe na API oficial da Caixa** (`servicebus2.caixa.gov.br/portaldeloterias/api/loteca`)
+— guidi e loteriascaixa-api não a servem. **O servidor do Render NÃO alcança a API da Caixa** (bloqueio
+de IP), mas a **Caixa permite CORS**, então o próprio navegador do usuário (no Brasil) busca direto:
+
+- `API._buscarCaixaDireto(lt, conc)` em `js/app.js` faz `fetch` direto na Caixa quando a loteria tem
+  `palpite:true` (só a Loteca). Sem proxy, sem passar pelo backend.
+- `API.parse` detecta `listaResultadoEquipeEsportiva` e monta `jogos:[{casa, fora, golCasa, golFora,
+  res}]` + prêmio/próximo concurso (funciona no card e na aba Resultados).
+- Palpite colorido no CSS: `.lj-res-1` verde (casa), `.lj-res-X` laranja (empate), `.lj-res-2` azul (fora).
+- **Limitação:** por vir direto da Caixa pelo navegador, a Loteca só carrega de dispositivos que
+  acessam a Caixa (Brasil). Fora do país o card da Loteca pode ficar vazio (as outras continuam via backend).
+- O backend também aceita Loteca na fonte `caixa-direto`, mas é inócuo (Render não alcança a Caixa) —
+  fica como fallback caso a conectividade mude.
 
 > \* **Coluna "Dias" desatualizada e não exibida na UI desde 05/07/2026** — a Caixa reorganizou o
 > calendário de sorteios em algum momento e esse texto nunca foi corrigido (confirmado
