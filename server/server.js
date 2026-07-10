@@ -168,8 +168,6 @@ const FONTES_EXIBICAO = [
       const d = await r.json();
       if (!d) return null;
       if (Array.isArray(d.listaDezenas) && d.listaDezenas.length) return d;
-      // Loteca não tem dezenas — tem a lista de jogos (times + placar). Aceita se vier o resultado esportivo.
-      if (Array.isArray(d.listaResultadoEquipeEsportiva) && d.listaResultadoEquipeEsportiva.length) return d;
       return null;
     },
   },

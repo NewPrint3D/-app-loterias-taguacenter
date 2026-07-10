@@ -33,18 +33,6 @@ function trevosHTML(r) {
   if (!r || !Array.isArray(r.trevos) || !r.trevos.length) return '';
   return '<span class="trevo-lbl">🍀 trevos</span>' + r.trevos.map(t => '<span class="bola bola-trevo">' + String(t).padStart(2,'0') + '</span>').join('');
 }
-// Loteca — renderiza os 14 jogos (times + placar) com o palpite derivado 1 (casa) / X (empate) / 2 (fora).
-function jogosHTML(r) {
-  if (!r || !Array.isArray(r.jogos) || !r.jogos.length) return '';
-  const linhas = r.jogos.map((j, i) =>
-    '<div class="lj-row"><span class="lj-n">' + (i+1) + '</span>' +
-    '<span class="lj-time">' + j.casa + '</span>' +
-    '<span class="lj-placar">' + (j.golCasa==null?'-':j.golCasa) + '<i>x</i>' + (j.golFora==null?'-':j.golFora) + '</span>' +
-    '<span class="lj-time lj-fora">' + j.fora + '</span>' +
-    '<span class="lj-res lj-res-' + j.res + '">' + j.res + '</span></div>'
-  ).join('');
-  return '<div class="loteca-jogos"><div class="lj-head">14 jogos · palpite: 1 casa · X empate · 2 fora</div>' + linhas + '</div>';
-}
 const uid  = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
 // Normaliza telefone para só dígitos, garantindo DDI 55 (ex: 5561999999999)
 function normalizarFone(raw) {
@@ -514,35 +502,11 @@ const API = {
     return null;
   },
   async fetch(lt, conc='') {
-    const data = LOTERIAS[lt]?.palpite
-      ? await API._buscarCaixaDireto(lt, conc)
-      : await API._buscarBruto(lt, conc);
+    const data = await API._buscarBruto(lt, conc);
     return data ? API.parse(data) : null;
-  },
-  // Loteca só existe na API oficial da Caixa e o Render não a alcança (bloqueio de IP do servidor).
-  // Como a Caixa permite CORS, o navegador do usuário (no Brasil) busca direto — sem proxy nem backend.
-  async _buscarCaixaDireto(lt, conc='') {
-    try {
-      const r = await fetch(`https://servicebus2.caixa.gov.br/portaldeloterias/api/${lt}/${conc}`, { signal: AbortSignal.timeout(12000) });
-      if (!r.ok) return null;
-      const d = await r.json();
-      return (d && d.numero) ? d : null;
-    } catch { return null; }
   },
   parse(r) {
     if (!r) return null;
-    // Loteca — sem dezenas; tem a lista de 14 jogos (times + placar). Deriva o palpite 1/X/2 do placar.
-    if (Array.isArray(r.listaResultadoEquipeEsportiva) && r.listaResultadoEquipeEsportiva.length) {
-      const jogos = r.listaResultadoEquipeEsportiva.map(j => {
-        const gc = j.nuGolEquipeUm, gf = j.nuGolEquipeDois;
-        const res = (gc==null||gf==null) ? '?' : (gc>gf ? '1' : (gc<gf ? '2' : 'X'));
-        return { casa:j.nomeEquipeUm, fora:j.nomeEquipeDois, golCasa:gc, golFora:gf, res };
-      });
-      return { numero:r.numero, data:r.dataApuracao, dezenas:[], jogos,
-        acumulado:!!r.acumulado, ganhadores:r.listaRateioPremio?.[0]?.numeroDeGanhadores??0,
-        premio:r.listaRateioPremio?.[0]?.valorPremio??0, prox:r.valorEstimadoProximoConcurso??0,
-        dataProxConcurso:r.dataProximoConcurso||null, numProxConcurso:r.numeroConcursoProximo||null };
-    }
     if (!r.listaDezenas) return null;
     return { numero:r.numero, data:r.dataApuracao, dezenas:r.listaDezenas,
       trevos:r.listaTrevos||[],
@@ -842,7 +806,7 @@ const R = {
           <span>${r.data||'—'}</span>
         </div>
         <div class="bolas">
-          ${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}${jogosHTML(r)}
+          ${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}
         </div>
         <div class="hres-info">
           ${r.acumulado
@@ -970,7 +934,7 @@ const R = {
       ${dados.slice(0,3).map(r=>`
         <div class="res-card">
           <div class="res-top"><span>Concurso #${r.numero||r.concurso||'—'}</span><span>${r.data||'—'}</span></div>
-          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}${jogosHTML(r)}</div>
+          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}</div>
           <div class="fxb txs muted mt8">
             <span>${r.acumulado?'<span class="badge b-acum">Acumulado!</span>':`${r.ganhadores??0} ganhador${r.ganhadores!==1?'es':''}`}</span>
             <span>${r.premio?fmtPremio(r.premio):''}</span>
@@ -1368,7 +1332,7 @@ const R = {
         </div>
         <div class="divider"></div>
         <div class="sectt">Jogos do bolão</div>
-        ${b.numeros.map((ns,i)=>`<div class="mb8"><div class="txs muted mb8">Jogo ${i+1}${res?` · ${res.jogos[i]?.acertos??0} acerto${(res.jogos[i]?.acertos??0)!==1?'s':''}`:''}</div><div class="bolas">${ns.map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}${jogosHTML(r)}</div></div>`).join('')}
+        ${b.numeros.map((ns,i)=>`<div class="mb8"><div class="txs muted mb8">Jogo ${i+1}${res?` · ${res.jogos[i]?.acertos??0} acerto${(res.jogos[i]?.acertos??0)!==1?'s':''}`:''}</div><div class="bolas">${ns.map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}</div></div>`).join('')}
       </div>
       ${res?`
       <div class="card mb12" style="border:2px solid ${res.premiado?'var(--gold)':'var(--border)'}">
@@ -1408,7 +1372,7 @@ const R = {
       ${dados.slice(0,3).map((r,i)=>`
         <div class="res-card">
           <div class="res-top"><span>Concurso #${r.numero||r.concurso||'—'}</span><span>${r.data||'—'}</span></div>
-          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}${jogosHTML(r)}</div>
+          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}</div>
           <div class="fxb txs muted mt8">
             <span>${r.acumulado?'<span class="badge b-acum">Acumulado!</span>':`${r.ganhadores??0} ganhador${r.ganhadores!==1?'es':''}`}</span>
             <span>${r.premio?fmtPremio(r.premio):''}</span>
@@ -1472,7 +1436,7 @@ const R = {
       data.map(({lt,r})=>!r?'':
         `<div class="card mb12" style="border-left:4px solid ${lt.cor}">
           <div class="fxb mb8"><div style="font-weight:700">${lt.emoji} ${lt.nome}</div><div class="txs muted">Conc. #${r.numero||'—'} · ${r.data||'—'}</div></div>
-          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}${jogosHTML(r)}</div>
+          <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}</div>
           <div class="fxb txs muted mt8">
             <span>${r.acumulado?'🔴 Acumulado':`${r.ganhadores??0} ganhador${r.ganhadores!==1?'es':''}`}</span>
           </div>
