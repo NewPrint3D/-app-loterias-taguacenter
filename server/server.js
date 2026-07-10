@@ -483,9 +483,9 @@ app.post('/api/lotes', async (req, res) => {
     const nomeLt = NOMES_LOTERIA[loteria] || loteria || '';
     const msg =
       `🎟️ *COTAS ABERTAS — ${nome}*${nomeLt ? ' · ' + nomeLt : ''}\n\n` +
-      `Estão disponíveis *${n} cotas* a *R$ ${valorFmt}* cada.\n` +
-      `⏳ Corra: você tem *${dur} minutos* — ou até as cotas esgotarem!\n\n` +
-      `👉 Abra o app *Lotérica Taguacenter*, entre com seu nome + grupo e *escolha sua cota* antes que acabe o tempo ou as cotas.\n\n` +
+      `Estão disponíveis *${n} cotas* a *R$ ${valorFmt}* cada.\n\n` +
+      `👉 Abra o app *Lotérica Taguacenter*, entre com seu nome + telefone e *escolha sua cota*.\n` +
+      `⏳ Depois de reservar, você tem *${dur} minutos* pra pagar e enviar o comprovante — senão a cota libera pra outra pessoa.\n\n` +
       `_Jogue com responsabilidade. Sorteios são aleatórios e auditados pela Caixa._ 🍀`;
     let aviso = { ok: false, motivo: 'sem_grupos' };
     if (Array.isArray(grupos) && grupos.length) aviso = await postarNosGrupos(grupos, msg);
@@ -509,13 +509,14 @@ app.post('/api/cotas/:id/reservar', async (req, res) => {
   if (!nome || !String(nome).trim()) return res.status(400).json({ ok: false, error: 'Informe seu nome.' });
   try {
     const { rows } = await pool.query(
-      `UPDATE cotas SET status='reservada', nome=$2, fone=$3, reservada_em=NOW()
+      `UPDATE cotas SET status='reservada', nome=$2, fone=$3, reservada_em=NOW(),
+         expira_em = NOW() + ((SELECT duracao_min FROM lotes WHERE id=cotas.lote_id) || ' minutes')::interval
        WHERE id=$1 AND status='livre'
-         AND lote_id IN (SELECT id FROM lotes WHERE status='ativo' AND expira_em > NOW())
+         AND lote_id IN (SELECT id FROM lotes WHERE status='ativo')
        RETURNING *`,
       [req.params.id, String(nome).trim().slice(0, 60), normalizarFoneServidor(fone || '')]
     );
-    if (!rows.length) return res.status(409).json({ ok: false, error: 'Essa cota acabou de ser reservada ou o tempo esgotou. Escolha outra.' });
+    if (!rows.length) return res.status(409).json({ ok: false, error: 'Essa cota acabou de ser reservada. Escolha outra.' });
     res.json({ ok: true, cota: rows[0] });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -527,7 +528,7 @@ app.post('/api/cotas/:id/comprovante', async (req, res) => {
   if (!img) return res.status(400).json({ ok: false, error: 'Anexe a imagem do comprovante.' });
   try {
     const { rows } = await pool.query(
-      `UPDATE cotas SET status='comprovante', comprovante=$2
+      `UPDATE cotas SET status='comprovante', comprovante=$2, expira_em=NULL
        WHERE id=$1 AND status IN ('reservada','comprovante') RETURNING *`,
       [req.params.id, img]
     );
@@ -549,7 +550,7 @@ app.put('/api/cotas/:id/confirmar', async (req, res) => {
 app.put('/api/cotas/:id/liberar', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `UPDATE cotas SET status='livre', nome='', fone='', comprovante=NULL, reservada_em=NULL, pago_em=NULL WHERE id=$1 RETURNING *`,
+      `UPDATE cotas SET status='livre', nome='', fone='', comprovante=NULL, reservada_em=NULL, pago_em=NULL, expira_em=NULL WHERE id=$1 RETURNING *`,
       [req.params.id]
     );
     if (rows.length) await pool.query(`UPDATE lotes SET status='ativo', aviso_esgotado=false WHERE id=$1 AND status='esgotado'`, [rows[0].lote_id]);
@@ -731,6 +732,9 @@ const _migracaoCotasAoVivo = (async () => {
       pago_em TIMESTAMPTZ,
       criado TIMESTAMPTZ DEFAULT NOW()
     )`);
+    // expira_em agora é por RESERVA individual (prazo pra pagar), não mais um prazo único do lote —
+    // ver POST /api/cotas/:id/reservar e o cron de liberação automática mais abaixo.
+    await pool.query(`ALTER TABLE cotas ADD COLUMN IF NOT EXISTS expira_em TIMESTAMPTZ`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_cotas_lote ON cotas(lote_id)`);
     console.log('Tabelas de Cotas ao Vivo (lotes/cotas) prontas.');
   } catch (e) {
@@ -1598,12 +1602,13 @@ async function backfillGrupoMembros() {
 }
 cron.schedule('0 */6 * * *', backfillGrupoMembros, { timezone: 'America/Sao_Paulo' });
 
-// Expiracao dos lotes de cotas ao vivo -- a cada minuto, fecha os lotes 'ativo' cujo cronometro ja
-// passou. Nao mexe nas cotas: reservas sem pagamento continuam 'reservada' (pendente) pro admin
-// decidir manualmente (liberar/confirmar) -- decisao do loterico.
+// Liberação automática de reservas expiradas -- a cada minuto, cotas 'reservada' cujo prazo
+// individual (expira_em) ja passou sem comprovante voltam pra 'livre' sozinhas, ficando disponiveis
+// de novo pros outros apostadores. O lote em si nao fecha por tempo -- so por 'Encerrar agora' do
+// admin ou por esgotar (100% vendido).
 cron.schedule('* * * * *', async () => {
-  try { await pool.query(`UPDATE lotes SET status='encerrado' WHERE status='ativo' AND expira_em < NOW()`); }
-  catch (e) { console.error('Expiracao de lotes:', e.message); }
+  try { await pool.query(`UPDATE cotas SET status='livre', nome='', fone='', comprovante=NULL, reservada_em=NULL, expira_em=NULL WHERE status='reservada' AND expira_em < NOW()`); }
+  catch (e) { console.error('Liberação de cotas expiradas:', e.message); }
 }, { timezone: 'America/Sao_Paulo' });
 
 // Gatilho manual — força a conferência sem esperar o cron (retry manual, testes)

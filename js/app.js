@@ -2926,10 +2926,11 @@ const COTAS = {
   _timer: null, _tickN: 0, _prevVend: {}, _busy: false,
 
   _esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); },
-  _restanteMs(l) { return new Date(l.expira_em).getTime() - Date.now(); },
+  // O prazo agora é por RESERVA individual (cota.expira_em), não mais um prazo único do lote inteiro.
+  _restanteMsCota(c) { return c.expira_em ? new Date(c.expira_em).getTime() - Date.now() : null; },
   _fmtMMSS(ms) { if (ms < 0) ms = 0; const s = Math.floor(ms/1000); return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); },
   _vendidas(l) { return (l.cotas||[]).filter(c => c.status==='comprovante' || c.status==='paga').length; },
-  _ativo(l) { return l.status==='ativo' && this._restanteMs(l) > 0; },
+  _ativo(l) { return l.status==='ativo'; },
 
   // Cliente nao tem login/token — guarda a cota que ele reservou (por lote) no aparelho dele.
   _minhas() { try { return JSON.parse(localStorage.getItem('ltr_minhas_cotas')||'{}'); } catch { return {}; } },
@@ -2937,6 +2938,7 @@ const COTAS = {
   _minhaCota(l) {
     const id = this._minhas()[l.id];
     let c = (l.cotas||[]).find(x => x.id === id);
+    if (c && c.status === 'livre') c = null; // reserva expirou e foi liberada — não é mais "minha"
     if (!c) { const nm = (S.user?.nome||'').trim().toLowerCase(); c = (l.cotas||[]).find(x => x.status!=='livre' && x.nome && x.nome.trim().toLowerCase()===nm); }
     return c || null;
   },
@@ -2951,7 +2953,13 @@ const COTAS = {
   parar() { if (this._timer) { clearInterval(this._timer); this._timer = null; } },
   iniciar(modo) { this.parar(); this._tickN = 0; this._timer = setInterval(() => this._tick(modo), 1000); },
   async _tick(modo) {
-    (S._lotesCache||[]).forEach(l => { const el = $('cd-'+l.id); if (el) { const ms = this._restanteMs(l); el.textContent = this._fmtMMSS(ms); if (ms<=0) el.classList.add('cd-fim'); } });
+    (S._lotesCache||[]).forEach(l => (l.cotas||[]).forEach(c => {
+      if (c.status !== 'reservada' || !c.expira_em) return;
+      const el = $('cd-cota-'+c.id); if (!el) return;
+      const ms = this._restanteMsCota(c);
+      el.textContent = this._fmtMMSS(ms);
+      if (ms<=0) el.classList.add('cd-fim');
+    }));
     this._tickN++;
     if (this._tickN % 3 === 0 && !this._busy && $('modal').hidden) {
       if (S.tela !== (modo==='admin' ? 'lotes' : 'cotas')) { this.parar(); return; }
@@ -2993,11 +3001,11 @@ const COTAS = {
     const reservadas = (l.cotas||[]).filter(c => c.status==='reservada').length;
     const pct = total ? Math.round(v/total*100) : 0;
     const ativo = this._ativo(l), lt = LOTERIAS[l.loteria];
-    const statusTxt = ({ esgotado:'esgotado', encerrado:'encerrado' })[l.status] || (ativo ? 'restante' : 'encerrado');
+    const statusTxt = ({ esgotado:'esgotado', encerrado:'encerrado' })[l.status] || (ativo ? 'aberto' : 'encerrado');
     return '<div class="lote-card">' +
       '<div class="fxb">' +
         '<div><div class="lote-nome">' + this._esc(l.nome) + '</div><div class="muted txs">' + (lt?lt.emoji+' '+lt.nome:'') + ' · Conc. #' + (l.concurso||'—') + ' · ' + fmt$(l.valor_cota) + '/cota</div></div>' +
-        '<div class="lote-cd ' + (ativo?'':'cd-off') + '"><div class="lote-cd-n" id="cd-' + l.id + '">' + this._fmtMMSS(this._restanteMs(l)) + '</div><div class="txs muted">' + statusTxt + '</div></div>' +
+        '<div class="txs muted" style="text-align:right">' + statusTxt + '<br>⏳ ' + l.duracao_min + ' min por reserva</div>' +
       '</div>' +
       '<div class="lote-bar"><div class="lote-bar-fill" style="width:' + pct + '%"></div></div>' +
       '<div class="fxb txs mb8"><span class="fw7">' + v + '/' + total + ' vendidas</span><span class="muted">' + reservadas + ' aguardando comprovante</span></div>' +
@@ -3016,7 +3024,8 @@ const COTAS = {
     else if (c.status==='reservada') acoes = '<button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
     else if (c.status==='paga') acoes = '<button class="ct-b" title="Ver comprovante" onclick="COTAS.verComprovante(\'' + c.id + '\')">👁️</button><button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
     const nome = c.nome ? this._esc(c.nome) : '<span class="muted">livre</span>';
-    return '<div class="cota ' + cls + '"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">' + nome + '</div><div class="cota-badge">' + badge + '</div><div class="cota-acoes">' + acoes + '</div></div>';
+    const cd = (c.status==='reservada' && c.expira_em) ? '<div class="cota-cd" id="cd-cota-' + c.id + '">' + this._fmtMMSS(this._restanteMsCota(c)) + '</div>' : '';
+    return '<div class="cota ' + cls + '"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">' + nome + '</div><div class="cota-badge">' + badge + '</div>' + cd + '<div class="cota-acoes">' + acoes + '</div></div>';
   },
   verComprovante(id) {
     const c = this._acharCota(id);
@@ -3052,7 +3061,7 @@ const COTAS = {
         '<div class="fg mb8" style="flex:1"><label>Qtd. de cotas</label><input id="lt-qtd" type="number" value="10" min="1" max="200"></div>' +
         '<div class="fg mb8" style="flex:1"><label>Valor da cota (R$)</label><input id="lt-valor" type="number" step="0.01" placeholder="0,00"></div>' +
       '</div>' +
-      '<div class="fg mb8"><label>⏳ Tempo (contador regressivo)</label><div class="dur-row">' + durRow + '</div></div>' +
+      '<div class="fg mb8"><label>⏳ Prazo pra pagar após reservar</label><div class="dur-row">' + durRow + '</div></div>' +
       '<div class="fg mb8"><label>📢 Divulgar nos grupos</label>' + grpRows + '</div>' +
       '<button class="btn btn-p btn-f mt8" onclick="COTAS.criar()">🚀 Abrir cotas e divulgar</button>' +
       '<div class="txs muted mt8">As mensagens de "50% vendido" e "esgotado" saem sozinhas nos grupos pelo bot.</div>'
@@ -3108,9 +3117,9 @@ const COTAS = {
     return '<div class="lote-card">' +
       '<div class="fxb">' +
         '<div><div class="lote-nome">' + this._esc(l.nome) + '</div><div class="muted txs">' + (lt?lt.emoji+' '+lt.nome:'') + ' · ' + fmt$(l.valor_cota) + '/cota</div></div>' +
-        '<div class="lote-cd"><div class="lote-cd-n" id="cd-' + l.id + '">' + this._fmtMMSS(this._restanteMs(l)) + '</div><div class="txs muted">restante</div></div>' +
+        '<div class="txs muted" style="text-align:right">⏳ ' + l.duracao_min + ' min<br>por reserva</div>' +
       '</div>' +
-      '<div class="cota-msg">👉 Escolha sua cota antes que acabe o tempo ou as cotas!</div>' +
+      '<div class="cota-msg">👉 Escolha sua cota — depois de reservar você tem ' + l.duracao_min + ' min pra pagar!</div>' +
       '<div class="lote-bar"><div class="lote-bar-fill" style="width:' + pct + '%"></div></div>' +
       '<div class="fxb txs mb8"><span class="fw7">' + v + '/' + total + ' vendidas</span>' + (minha ? '<span class="badge txs" style="background:var(--primary);color:#000">Sua cota: #' + minha.numero + '</span>' : '') + '</div>' +
       (metade ? '<div class="cota-hot">🔥 Corra! Já vendemos ' + v + '/' + total + ' — não fique de fora!</div>' : '') +
@@ -3119,14 +3128,18 @@ const COTAS = {
   },
   _cotaCliente(l, c, minha) {
     if (minha && minha.id === c.id) {
-      if (c.status==='reservada') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><button class="btn btn-p btn-sm cota-anexar" onclick="COTAS.anexar(\'' + c.id + '\')">📎 Anexar comprovante</button></div>';
+      if (c.status==='reservada') {
+        const cd = c.expira_em ? '<div class="cota-cd" id="cd-cota-' + c.id + '">' + this._fmtMMSS(this._restanteMsCota(c)) + '</div>' : '';
+        return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div>' + cd + '<button class="btn btn-p btn-sm cota-anexar" onclick="COTAS.anexar(\'' + c.id + '\')">📎 Anexar comprovante</button></div>';
+      }
       if (c.status==='comprovante') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><div class="cota-badge">📎 Comprovante enviado ✓</div></div>';
       if (c.status==='paga') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><div class="cota-badge">✅ Pago</div></div>';
     }
     if (c.status==='livre') return '<div class="cota ct-livre"><div class="cota-num">#' + c.numero + '</div><button class="btn btn-o btn-sm" onclick="COTAS.reservar(\'' + l.id + '\',\'' + c.id + '\')">Escolher</button></div>';
     const nm = c.nome ? this._esc(c.nome.split(' ')[0]) : '—';
     const pago = c.status==='comprovante' || c.status==='paga';
-    return '<div class="cota ' + (pago?'ct-paga':'ct-res') + '"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">' + nm + '</div><div class="cota-badge">' + (pago?'✅ Vendida':'⏳ Reservada') + '</div></div>';
+    const cd = (c.status==='reservada' && c.expira_em) ? '<div class="cota-cd" id="cd-cota-' + c.id + '">' + this._fmtMMSS(this._restanteMsCota(c)) + '</div>' : '';
+    return '<div class="cota ' + (pago?'ct-paga':'ct-res') + '"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">' + nm + '</div>' + cd + '<div class="cota-badge">' + (pago?'✅ Vendida':'⏳ Reservada') + '</div></div>';
   },
   reservar(loteId, cotaId) {
     MODAL.open(

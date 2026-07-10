@@ -881,10 +881,6 @@ body[data-tema="independencia"] #faixa-tema::before {
   border-radius: var(--rmd, 14px); padding: 14px; margin-bottom: 14px;
 }
 .lote-nome { font-weight: 700; font-size: 1.02rem; }
-.lote-cd { text-align: center; min-width: 78px; padding: 6px 10px; border-radius: 10px; background: var(--bg3); border: 1px solid var(--border); }
-.lote-cd-n { font-weight: 800; font-size: 1.35rem; font-variant-numeric: tabular-nums; color: var(--gold); line-height: 1.1; }
-.lote-cd.cd-off { opacity: .55; }
-.lote-cd-n.cd-fim { color: var(--red); }
 .lote-bar { height: 8px; background: var(--bg3); border-radius: 99px; overflow: hidden; margin: 10px 0 6px; }
 .lote-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--gold)); border-radius: 99px; transition: width .4s ease; }
 .fw7 { font-weight: 700; }
@@ -906,6 +902,8 @@ body[data-tema="independencia"] #faixa-tema::before {
 .cota-num { font-size: .72rem; color: var(--muted); font-weight: 700; }
 .cota-nome { font-size: .84rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cota-badge { font-size: .68rem; font-weight: 700; }
+.cota-cd { font-size: .74rem; font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
+.cota-cd.cd-fim { color: var(--red); }
 .cota-acoes { display: flex; gap: 4px; justify-content: center; }
 .ct-b { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 3px 6px; font-size: .82rem; cursor: pointer; line-height: 1; }
 .ct-b.ok { border-color: var(--primary); }
