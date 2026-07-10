@@ -282,16 +282,53 @@ const DB = {
 // AUTH
 // =============================================
 const AUTH = {
-  // Chamado a cada tecla no campo nome — mostra grupo para cliente, senha para admin/dev
+  // Mapa {nomeNormalizado: fone} de apostadores que já entraram neste aparelho — permite pular o
+  // campo telefone da segunda vez em diante, sem precisar de senha/token pra cliente.
+  _apostadoresConhecidos() { try { return JSON.parse(localStorage.getItem('ltr_apostadores')||'{}'); } catch { return {}; } },
+  _lembrarApostador(nome, fone) {
+    const m = AUTH._apostadoresConhecidos();
+    m[AUTH._normNome(nome)] = fone;
+    localStorage.setItem('ltr_apostadores', JSON.stringify(m));
+  },
+  _normNome(nome) { return (nome||'').trim().toLowerCase().replace(/\s+/g,' '); },
+  _nomeCompleto(nome) { return (nome||'').trim().split(/\s+/).filter(Boolean).length >= 2; },
+
+  // Chamado a cada tecla no campo nome — mostra senha para admin/dev, telefone para cliente
+  // (só na primeira vez neste aparelho; da segunda em diante o nome sozinho já basta).
   onNomeInput(v) {
-    const low = v.trim().toLowerCase();
+    const nome = v.trim();
+    const low = nome.toLowerCase();
     const isPriv = (low === 'admin' || low === 'dev');
     $('field-senha').hidden = !isPriv;
-    $('field-grupo').hidden = isPriv || !v.trim();
     const sub = $('login-sub');
-    if (sub) sub.textContent = isPriv
-      ? 'Digite a senha de administrador'
-      : v.trim() ? 'Informe o nome do seu grupo de bolão' : 'Digite seu nome para entrar';
+    if (isPriv) {
+      $('field-telefone').hidden = true;
+      if (sub) sub.textContent = 'Digite a senha de administrador';
+    } else if (!nome) {
+      $('field-telefone').hidden = true;
+      if (sub) sub.textContent = 'Digite seu nome para entrar';
+    } else if (!AUTH._nomeCompleto(nome)) {
+      $('field-telefone').hidden = true;
+      if (sub) sub.textContent = 'Nome completo, por favor';
+    } else {
+      const conhecido = AUTH._apostadoresConhecidos()[AUTH._normNome(nome)];
+      $('field-telefone').hidden = !!conhecido;
+      if (sub) sub.textContent = conhecido ? 'Bem-vindo de volta! 👋' : 'Informe seu telefone (DDD) para continuar';
+    }
+    AUTH._atualizarBotaoEntrar();
+  },
+
+  onTelefoneInput() { AUTH._atualizarBotaoEntrar(); },
+
+  _atualizarBotaoEntrar() {
+    const btn = $('btn-entrar'); if (!btn) return;
+    const nome = ($('inp-nome')?.value || '').trim();
+    const low = nome.toLowerCase();
+    if (low === 'admin' || low === 'dev') { btn.disabled = false; return; }
+    if (!AUTH._nomeCompleto(nome)) { btn.disabled = true; return; }
+    if (AUTH._apostadoresConhecidos()[AUTH._normNome(nome)]) { btn.disabled = false; return; }
+    const digitos = ($('inp-telefone')?.value || '').replace(/\D/g, '');
+    btn.disabled = digitos.length < 10;
   },
 
   // Chama o endpoint de login, guarda o token se der certo, e devolve o JSON mesmo em erro (401/429)
@@ -320,15 +357,27 @@ const AUTH = {
       S.user = { login:low, role:data.role, nome:data.nome };
       AUTH._start(); return;
     }
-    // Cliente — nome + grupo obrigatórios
-    const grupo = ($('inp-grupo')?.value || '').trim();
-    if (!grupo) {
+    // Cliente — nome completo obrigatório; telefone só na primeira vez neste aparelho
+    if (!AUTH._nomeCompleto(nome)) {
       err.hidden=false;
-      err.textContent='Informe o nome do seu grupo de bolão para continuar.';
-      $('inp-grupo')?.focus();
+      err.textContent='Digite seu nome completo (nome e sobrenome).';
+      $('inp-nome')?.focus();
       return;
     }
-    S.user = { role:'cliente', nome, grupo };
+    let fone = AUTH._apostadoresConhecidos()[AUTH._normNome(nome)];
+    if (!fone) {
+      const digitado = ($('inp-telefone')?.value || '').trim();
+      if (digitado.replace(/\D/g,'').length < 10) {
+        err.hidden=false;
+        err.textContent='Informe seu telefone com DDD para continuar.';
+        $('inp-telefone')?.focus();
+        return;
+      }
+      fone = normalizarFone(digitado);
+    }
+    AUTH._lembrarApostador(nome, fone);
+    _api.post('/api/usuarios', { id:'ap_'+fone, nome, ativo:true, criado:hoje(), fone });
+    S.user = { role:'cliente', nome, fone };
     AUTH._start();
   },
 
@@ -398,9 +447,10 @@ const AUTH = {
     $('tela-login').hidden = false;
     $('inp-nome').value = '';
     $('inp-p').value = '';
-    if ($('inp-grupo')) $('inp-grupo').value = '';
+    if ($('inp-telefone')) $('inp-telefone').value = '';
     $('field-senha').hidden = true;
-    $('field-grupo').hidden = true;
+    $('field-telefone').hidden = true;
+    if ($('btn-entrar')) $('btn-entrar').disabled = true;
     const sub = $('login-sub');
     if (sub) sub.textContent = 'Digite seu nome para entrar';
     Object.values(S.charts).forEach(c=>c?.destroy?.());
@@ -670,39 +720,25 @@ const R = {
 
   async _homeUser() {
     const nome = S.user.nome.split(' ')[0];
-    const grupo = S.user.grupo || '';
     const h = new Date().getHours();
     const saud = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
     S._hLt = S._hLt || 'megasena';
     S._hRes = {};
 
-    // Busca o grupo cadastrado pelo admin que bate com o nome informado
-    const grpMatch = DB.grupos.list().find(g =>
-      g.ativo && g.nome.toLowerCase().includes(grupo.toLowerCase())
-    ) || DB.grupos.list().find(g =>
-      g.ativo && grupo.toLowerCase().includes(g.nome.toLowerCase())
-    );
-    const wppLink = grpMatch?.link || null;
-
     $('view-home').innerHTML = `
       <div class="ug-box">
         <div class="ug-nome">${saud}, <strong>${nome}</strong>! 👋</div>
-        ${grupo ? `<div class="ug-grupo">📋 ${grupo}</div>` : ''}
       </div>
 
-      ${wppLink ? `
-      <a class="ug-wpp" href="${wppLink}" target="_blank" rel="noopener">
-        ${WPP_SVG(22)}
-        <div class="ug-wpp-info">
-          <div class="ug-wpp-titulo">Entrar no grupo do WhatsApp</div>
-          <div class="ug-wpp-sub">${grpMatch.nome}</div>
+      <div id="boloes-ativos-card" class="boloes-ativos-card" onclick="R.ir('cotas')">
+        <div class="bac-emoji">🎟️</div>
+        <div class="bac-info">
+          <div class="bac-titulo">Bolões Ativos</div>
+          <div class="bac-sub" id="bac-sub">Carregando…</div>
         </div>
-        <span class="ug-wpp-seta">›</span>
-      </a>` : grupo ? `
-      <div class="ug-wpp-off">
-        ${WPP_SVG(18)}
-        <span>Grupo "<strong>${grupo}</strong>" — link ainda não cadastrado pelo administrador</span>
-      </div>` : ''}
+        <span class="bac-seta">›</span>
+      </div>
+      <div id="minha-participacao"></div>
 
       <div class="sectt mb8">Loterias — ao vivo</div>
       <div class="grid-lt mb4">
@@ -740,7 +776,31 @@ const R = {
     }));
 
     R._hRender(S._hLt);
-    COTAS.checarBannerHome();
+    R._renderBoloesAtivos();
+  },
+
+  async _renderBoloesAtivos() {
+    const lotes = await COTAS._carregar();
+    if (S.tela !== 'home') return; // usuário já navegou pra outra tela enquanto carregava
+    const ativos = lotes.filter(l => COTAS._ativo(l));
+    const sub = $('bac-sub');
+    if (sub) sub.textContent = ativos.length
+      ? ativos.length + ' bolão' + (ativos.length>1?'ões':'') + ' com cotas abertas agora!'
+      : 'Nenhum bolão ativo no momento — toque para conferir.';
+
+    let minha = null, loteMinha = null;
+    for (const l of ativos) { const c = COTAS._minhaCota(l); if (c) { minha = c; loteMinha = l; break; } }
+    const part = $('minha-participacao'); if (!part) return;
+    if (minha) {
+      const statusTxt = { reservada:'⏳ aguardando pagamento', comprovante:'📎 aguardando confirmação', paga:'✅ pago' }[minha.status] || '';
+      part.className = 'minha-participacao';
+      part.onclick = () => R.ir('cotas');
+      part.innerHTML = '🎟️ Você tem a cota #' + minha.numero + ' em <strong>' + COTAS._esc(loteMinha.nome) + '</strong> — ' + statusTxt;
+    } else {
+      part.className = 'sem-participacao';
+      part.onclick = () => R.ir('cotas');
+      part.innerHTML = 'Participe dos nossos bolões! 🍀 Toque em "Bolões Ativos" acima e escolha sua cota.';
+    }
   },
 
   _hSel(ltId) {
@@ -3112,19 +3172,6 @@ const COTAS = {
       rd.readAsDataURL(f);
     };
     inp.click();
-  },
-
-  // Banner no Início do cliente quando ha lote ativo
-  async checarBannerHome() {
-    const l = await _api.get('/api/lotes'); if (!Array.isArray(l)) return;
-    const ativos = l.filter(x => x.status==='ativo' && new Date(x.expira_em).getTime() > Date.now());
-    if (!ativos.length) return;
-    const home = $('view-home'); if (!home || S.tela !== 'home') return;
-    if ($('cota-banner-home')) return;
-    const b = document.createElement('div');
-    b.id = 'cota-banner-home'; b.className = 'cota-banner'; b.onclick = () => R.ir('cotas');
-    b.innerHTML = '🎟️ <strong>' + ativos.length + ' bolão(ões) com cotas abertas agora!</strong> Toque para escolher a sua antes que esgote. ⏳';
-    home.insertBefore(b, home.firstChild);
   },
 };
 

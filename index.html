@@ -36,10 +36,10 @@
              oninput="AUTH.onNomeInput(this.value)">
     </div>
 
-    <div class="field" id="field-grupo" hidden>
-      <label>Seu grupo de bolão</label>
-      <input id="inp-grupo" type="text" placeholder="Ex: Turma da Churrasqueira" autocomplete="off"
-             onkeydown="if(event.key==='Enter')AUTH.entrar()">
+    <div class="field" id="field-telefone" hidden>
+      <label>Seu telefone (DDD)</label>
+      <input id="inp-telefone" type="tel" placeholder="Ex: (61) 99999-9999" autocomplete="off"
+             oninput="AUTH.onTelefoneInput()" onkeydown="if(event.key==='Enter')AUTH.entrar()">
     </div>
 
     <div class="field" id="field-senha" hidden>
@@ -48,7 +48,7 @@
              onkeydown="if(event.key==='Enter')AUTH.entrar()">
     </div>
 
-    <button class="btn btn-p btn-f" onclick="AUTH.entrar()">Entrar</button>
+    <button class="btn btn-p btn-f" id="btn-entrar" onclick="AUTH.entrar()" disabled>Entrar</button>
     <p id="login-err" class="erro" hidden></p>
   </div>
 </div>

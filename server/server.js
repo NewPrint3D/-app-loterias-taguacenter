@@ -699,7 +699,7 @@ pool.query(`CREATE TABLE IF NOT EXISTS wpp_cadastros (
 // IMPORTANTE: criar em ORDEM e com await — a tabela `cotas` tem FK para `lotes`, então `lotes`
 // precisa existir ANTES. Antes eram 3 pool.query() em paralelo com .catch(() => {}) engolindo o
 // erro: a `cotas` corria antes da `lotes` existir, falhava calada, e /api/lotes dava 500.
-(async () => {
+const _migracaoCotasAoVivo = (async () => {
   try {
     await pool.query(`CREATE TABLE IF NOT EXISTS lotes (
       id TEXT PRIMARY KEY,
@@ -1636,6 +1636,6 @@ app.post('/api/resultados/relay', async (req, res) => {
 
 // Só aceita conexões depois que a migração crítica (grupo_id) terminar — elimina a janela onde
 // uma requisição POST /api/boloes podia chegar antes da coluna existir de verdade no banco.
-_migracaoGrupoId.finally(() => {
+Promise.all([_migracaoGrupoId, _migracaoCotasAoVivo]).finally(() => {
   app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));
 });
