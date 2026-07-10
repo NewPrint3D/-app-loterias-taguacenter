@@ -475,9 +475,10 @@ body {
   0%   { opacity: 1; transform: rotate(var(--a)) translateY(0) scale(1); }
   100% { opacity: 0; transform: rotate(var(--a)) translateY(-90px) scale(.4); }
 }
+.h-premio-btn { display: inline-flex; align-items: center; gap: 4px; font-size: .68rem; font-weight: 700; color: var(--gold); white-space: nowrap; }
 #h-premio.h-premio-pend { position: relative; }
 #h-premio.h-premio-pend::after {
-  content: ''; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px;
+  content: ''; position: absolute; top: 2px; right: -2px; width: 8px; height: 8px;
   border-radius: 50%; background: var(--red); box-shadow: 0 0 0 2px var(--bg);
 }
 
