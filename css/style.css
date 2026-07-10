@@ -170,7 +170,8 @@ body {
 .lt-card {
   border-radius: var(--radius); padding: 18px 12px;
   cursor: pointer; position: relative; overflow: hidden;
-  min-height: 128px; display: flex; flex-direction: column; justify-content: flex-end;
+  min-height: 128px; display: flex; flex-direction: column; justify-content: center;
+  align-items: center; text-align: center;
   transition: transform .15s, box-shadow .15s;
 }
 .lt-card::before {
@@ -178,7 +179,6 @@ body {
   background: linear-gradient(160deg, rgba(255,255,255,.09) 0%, transparent 60%);
 }
 .lt-card:hover { transform: scale(1.03); box-shadow: 0 8px 30px rgba(0,0,0,.5); }
-.lt-emoji { font-size: 2.1rem; position: absolute; top: 12px; right: 12px; }
 .lt-nome  { font-size: .95rem; font-weight: 800; color: var(--lt-txt, #fff); }
 .lt-dias  { font-size: .68rem; color: rgba(255,255,255,.75); margin-top: 3px; }
 .lt-cnt   { font-size: .68rem; color: rgba(255,255,255,.9);  margin-top: 8px; font-weight: 600; }
@@ -487,7 +487,7 @@ input:checked + .sl2 { background: var(--red); }
 input:checked + .sl2::before { transform: translateX(19px); }
 
 /* ---- CARDS LOTERIA — DADOS AO VIVO ---- */
-.lt-dados-live { min-height: 18px; margin-bottom: 4px; display: flex; flex-direction: column; gap: 2px; padding-right: 48px; }
+.lt-dados-live { min-height: 18px; margin-bottom: 4px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .lt-acum       { display: inline-block; background: rgba(239,68,68,.85); color:#fff; font-size:.58rem;
                  font-weight:800; border-radius:4px; padding:1px 5px; letter-spacing:.5px; text-transform:uppercase; width:fit-content; }
 .lt-premio     { font-size: .85rem; font-weight: 800; color: var(--lt-txt, #fff); text-shadow: var(--lt-shadow, 0 1px 4px rgba(0,0,0,.5)); line-height: 1.1; }
