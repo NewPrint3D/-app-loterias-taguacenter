@@ -393,13 +393,13 @@ body {
   padding: 16px; margin-bottom: 16px; position: relative; overflow: hidden;
 }
 .ze-card::before {
-  content: ''; position: absolute; right: 12px; top: 10px;
-  width: 52px; height: 52px;
+  content: ''; position: absolute; right: 12px; top: 12px;
+  width: 40px; height: 40px;
   background: url('../img/ze-loteca.png') center/contain no-repeat;
   opacity: .55;
 }
-.ze-card-title { font-size: .75rem; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
-.ze-card-msg   { font-size: .9rem; line-height: 1.5; font-style: italic; }
+.ze-card-title { font-size: .75rem; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; padding-right: 48px; }
+.ze-card-msg   { font-size: .9rem; line-height: 1.5; font-style: italic; padding-right: 48px; }
 .ze-btn-ico    { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; vertical-align: middle; margin-right: 4px; }
 
 /* ---- USUÁRIOS (admin) ---- */
