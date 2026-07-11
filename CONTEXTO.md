@@ -4,7 +4,7 @@ App de gestão de bolões para lotérica física (Taguacenter, Brasília).
 Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreSQL.
 Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
-**Estado em: 11/07/2026**
+**Estado em: 11/07/2026** (Etapa 3 — Bolão Anual/Parcelado — implementada, aguardando deploy/validação em produção)
 
 ## Como rodar localmente
 
@@ -128,7 +128,7 @@ Padronização visual seguindo as cores oficiais das Loterias Caixa e inclusão 
 > O módulo `SEED` (dados demo fictícios) foi **removido** em 05/07/2026 — banco de produção fica
 > vazio até ter dados reais, sem repovoamento automático.
 
-## Banco de dados — Neon PostgreSQL (13 tabelas)
+## Banco de dados — Neon PostgreSQL (16 tabelas)
 
 ```
 grupos        — id, nome, link, membros (nº estimado digitado no cadastro), ativo, jid (JID WhatsApp para o bot)
@@ -155,6 +155,15 @@ cotas         — id, lote_id (FK→lotes CASCADE), numero, status (livre/reserv
                 reserva, liberado sozinho por cron se estourar sem comprovante), criado
 premiacoes    — id, nome, fone, valor, mensagem, confirmada BOOLEAN, confirmada_em, criado
                 (casamento apostador→premiação por telefone normalizado, não por nome)
+boloes_parcelados             — id, nome, ano, valor_mensal, duracao_meses, valor_total, status, criado
+                                 (bolão genérico com arrecadação mensal — ver seção "Bolão Anual")
+bolao_parcelado_participantes — id, bolao_parcelado_id (FK CASCADE), nome, fone, quitado BOOLEAN,
+                                 mes_quitacao_previsto (mês calendário 1-12 em que declarou pagar tudo
+                                 de uma vez), quitado_em, ativo, criado
+bolao_parcelado_pagamentos    — id, participante_id (FK CASCADE), mes (1-12, calendário), valor,
+                                 comprovante, status (pendente/confirmado/rejeitado), enviado_em,
+                                 confirmado_em — UNIQUE(participante_id,mes): reenvio do mesmo mês
+                                 substitui, não duplica
 ```
 
 > IMPORTANTE: PostgreSQL retorna campos NUMERIC como string JS — `carregarDados()` converte com `+valor`.
@@ -307,6 +316,43 @@ automaticamente no grupo pelo bot.
     checa se a cota salva voltou pra `livre` (reserva expirou) e não mostra mais como "sua cota"
     nesse caso.
 
+## Bolão Anual/Parcelado (11/07/2026)
+
+Sistema **genérico** (não hardcoded pra Mega da Virada) de bolões com arrecadação mensal — ex:
+R$85/mês × 12 meses = R$1020, ou quitar tudo de uma vez num mês à escolha. Mês de referência é
+sempre **mês calendário** (1=janeiro...12=dezembro), independente de quando o bolão começou.
+
+- **Admin** — Config. → **📅 Bolão Anual**: lista de bolões cadastrados (nome, ano, valor mensal ×
+  duração → valor total calculado automaticamente), botão "+ Participante" no detalhe. Detalhe do
+  bolão (`R._anualDet`) mostra a **planilha completa** (participante × mês, célula colorida: ✅ pago,
+  ⏳ aguardando confirmação, 🔴 inadimplente, 💰 quitado, — mês futuro) + 2 gráficos Chart.js
+  (quitados/em dia/inadimplentes; arrecadado × esperado). Clicar numa célula pendente/paga abre o
+  comprovante e permite confirmar/rejeitar.
+- **Cliente** — card na Home (estilo "Bolões Ativos", borda dourada) só aparece se o telefone bater
+  com algum participante cadastrado — não polui a Home de quem não participa. Tela "Meu Bolão
+  Anual": grade de meses, botão **"Enviar comprovante"** (mês em texto livre — "mês de julho"/"mês
+  07"/"07", parseado por `parseMesReferencia()`; avisa "Mês de referência, por favor." se vazio/não
+  reconhecido, ou "Você está com o mês de [X] em aberto..." se não bater com o primeiro mês ainda
+  não pago) e **"Declarar quitação"** (escolhe o mês em que vai pagar tudo de uma vez).
+- **Quitação automática**: quando o admin confirma um comprovante cujo mês bate com o
+  `mes_quitacao_previsto` do participante, o backend marca `quitado=true` sozinho — não precisa
+  criar pagamento pra cada um dos 12 meses.
+- **Rotas** (`server.js`): `GET /api/boloes-parcelados` (pública, aninhado bolão→participantes→
+  pagamentos); `POST/DELETE /api/boloes-parcelados` e `/bolao-parcelado-participantes` (protegidas,
+  admin); `PUT /bolao-parcelado-participantes/:id/quitacao` (pública, cliente declara intenção);
+  `POST /bolao-parcelado-pagamentos` (pública, força `status='pendente'` no servidor, mesmo padrão
+  defensivo de `/api/pagamentos` — `ON CONFLICT(participante_id,mes) DO UPDATE`, reenvio substitui);
+  `PUT /bolao-parcelado-pagamentos/:id/status` (protegida, confirma/rejeita e aplica a quitação
+  automática).
+- **Fora do escopo desta primeira versão**: gráfico de padrão de datas de pagamento por apostador
+  (precisaria de histórico de dia-do-mês) e cobrança automática via WhatsApp — ambos ficam pra um
+  follow-up se o usuário quiser.
+- **Bug pego em teste local antes do commit**: o envio de comprovante do lado do cliente
+  (`_envCompAnual`) não incluía `status:'pendente'` no objeto otimista local — a célula da planilha
+  mostrava 🔴 (inadimplente) em vez de ⏳ (aguardando confirmação) até a próxima sincronização com o
+  servidor. Corrigido incluindo `status`/`enviado_em` explícitos no payload, mesmo padrão já usado
+  em `R._envComp` (Cotas ao Vivo).
+
 ## Funcionalidades implementadas
 
 - Splash screen + login (bcrypt + JWT 24h, senha em texto puro); cliente entra com **nome completo +
@@ -319,6 +365,8 @@ automaticamente no grupo pelo bot.
 - Cotas ao Vivo / Bolão Relâmpago — cronômetro por reserva individual (não mais por lote), cota
   libera sozinha se estourar o prazo sem comprovante
 - Premiação — admin cadastra prêmio por nome+telefone, apostador confirma com fogos de artifício
+- **Bolão Anual/Parcelado** — sistema genérico de arrecadação mensal, planilha completa (participante
+  × mês) com gráficos pro admin, upload de comprovante com mês livre + declaração de quitação pro cliente
 - **Grupos de Bolões** (navegação do admin) — acompanhamento de pagamento por grupo
 - Bolões — criar, excluir (admin/dev), detalhes (Resultado / IA / Membros)
 - Membros — pagamento, comprovante, importação por colagem ou via bot do WhatsApp
@@ -381,6 +429,15 @@ produção com lote de teste real.
 quando clicados via automação de browser — usar `DB.x.del(id)`/`_api.del(...)` direto no console
 pra apagar dados de teste, nunca clicar no botão que abre o `confirm()`.
 
+**Etapa 3 — Bolão Anual/Parcelado** (11/07/2026): 4ª e última funcionalidade grande combinada no
+início da sessão — ver seção própria "Bolão Anual/Parcelado" acima para detalhes completos (schema,
+rotas, telas admin/cliente, quitação automática). Testada localmente ponta a ponta (criar bolão,
+adicionar participante, enviar comprovante de mês errado → aviso, mês certo → pendente, admin
+confirma → pago, declarar quitação → confirmar o mês previsto → quitado automático, gráficos)
+antes do commit — como o backend de produção ainda não tinha as rotas novas na hora do teste local,
+os testes iniciais rodaram só em cache local (POST retornando 404 silencioso); a validação de
+verdade em produção (com dados reais de teste + limpeza) acontece depois do deploy.
+
 ## Dados de teste
 
 - `C:\Users\User\Downloads\comprovante para teste app loterias.jpeg`
@@ -410,11 +467,6 @@ Render atualiza frontend + backend automaticamente em ~1-3 min.
 
 ## Próximos passos pendentes
 
-0. **Etapa 3 — Bolão Anual/parcelado genérico** (tipo Mega da Virada, mas reaproveitável, não
-   hardcoded pra dezembro): admin cadastra bolão com valor mensal e duração configuráveis;
-   participante paga mensal ou quita de uma vez; upload de comprovante exige mês de referência
-   (aceita texto livre, avisa se não vier); painel do admin = planilha completa (mês × pessoa) com
-   gráficos de quitado/em dia/inadimplente. Escopo já combinado com o usuário — próxima etapa.
 1. **Chip brasileiro** — ao voltar ao Brasil: desconectar bot, novo chip, reconectar via QR
 2. **Credenciamento Caixa (SISGEL)** — acesso a notificações de venda em tempo real, tipo ConectaLot
 3. **Push notifications PWA** — pro admin, quando integração Caixa for aprovada

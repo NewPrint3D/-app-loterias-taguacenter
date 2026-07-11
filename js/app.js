@@ -6,7 +6,7 @@ const S = {
   user: null, tela: 'home', loteria: null, bolao: null, grupoAtual: null,
   stack: [], ze_i: 0, ze_t: null, dtaps: 0, dtap_t: 0,
   charts: {}, resultados: [], cartela: null, statsF: null,
-  cache: { boloes:[], grupos:[], vendas:[], pags:[], usuarios:[], grupoMembros:[], ctrl:{ bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] } },
+  cache: { boloes:[], grupos:[], vendas:[], pags:[], usuarios:[], grupoMembros:[], boloesParcelados:[], ctrl:{ bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] } },
 };
 const $ = id => document.getElementById(id);
 const fmt$ = n => 'R$ ' + (n||0).toLocaleString('pt-BR',{minimumFractionDigits:2});
@@ -182,10 +182,10 @@ const _api = {
 };
 
 async function carregarDados() {
-  const [boloes,grupos,vendas,pags,usuarios,ctrl,grupoMembros,premiacoes] = await Promise.all([
+  const [boloes,grupos,vendas,pags,usuarios,ctrl,grupoMembros,premiacoes,boloesParcelados] = await Promise.all([
     _api.get('/api/boloes'), _api.get('/api/grupos'), _api.get('/api/vendas'),
     _api.get('/api/pagamentos'), _api.get('/api/usuarios'), _api.get('/api/config'),
-    _api.get('/api/grupo_membros'), _api.get('/api/premiacoes'),
+    _api.get('/api/grupo_membros'), _api.get('/api/premiacoes'), _api.get('/api/boloes-parcelados'),
   ]);
   // PostgreSQL retorna NUMERIC como string — converter para number
   if (Array.isArray(boloes))   S.cache.boloes   = boloes.map(b => ({
@@ -202,6 +202,17 @@ async function carregarDados() {
   if (ctrl && ctrl.id)         S.cache.ctrl     = ctrl;
   if (Array.isArray(grupoMembros)) S.cache.grupoMembros = grupoMembros;
   if (Array.isArray(premiacoes)) S.cache.premiacoes = premiacoes.map(p => ({ ...p, valor: +p.valor||0 }));
+  if (Array.isArray(boloesParcelados)) S.cache.boloesParcelados = boloesParcelados.map(b => ({
+    ...b,
+    valor_mensal: +b.valor_mensal || 0,
+    duracao_meses: +b.duracao_meses || 12,
+    valor_total: +b.valor_total || 0,
+    participantes: (b.participantes||[]).map(p => ({
+      ...p,
+      mes_quitacao_previsto: p.mes_quitacao_previsto == null ? null : +p.mes_quitacao_previsto,
+      pagamentos: (p.pagamentos||[]).map(pg => ({ ...pg, mes: +pg.mes||0, valor: +pg.valor||0 })),
+    })),
+  }));
 }
 
 // Um bolão pertence a um grupo só se o grupo_id bater (vínculo de verdade).
@@ -211,6 +222,16 @@ async function carregarDados() {
 // Bolões legados sem grupo_id (de antes dessa migração) foram corrigidos manualmente uma vez.
 function bolaoDoGrupo(b, g) {
   return !!b.grupo_id && b.grupo_id === g.id;
+}
+
+// Interpreta texto livre de mês de referência ("mês de julho", "mês 07", "07") — usado tanto no
+// upload de comprovante do Bolão Anual quanto na validação do mês em aberto do participante.
+const MESES_NOMES = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+function parseMesReferencia(texto) {
+  const t = (texto||'').toLowerCase();
+  for (let i=0;i<12;i++) if (t.includes(MESES_NOMES[i])) return i+1;
+  const m = t.match(/\b(0?[1-9]|1[0-2])\b/);
+  return m ? parseInt(m[1],10) : null;
 }
 
 // =============================================
@@ -268,6 +289,65 @@ const DB = {
       _api.put(`/api/premiacoes/${id}/confirmar`);
     },
     del:  id  => { S.cache.premiacoes=S.cache.premiacoes.filter(p=>p.id!==id); _api.del('/api/premiacoes/'+id); },
+  },
+  boloesParcelados: {
+    list: ()  => S.cache.boloesParcelados || [],
+    get:  id  => (S.cache.boloesParcelados||[]).find(b=>b.id===id),
+    // Participação do cliente logado: participante (com o bolão embutido) em qualquer bolão parcelado ativo.
+    minhaParticipacao: () => {
+      for (const b of (S.cache.boloesParcelados||[])) {
+        const p = (b.participantes||[]).find(x => x.fone === S.user?.fone && x.ativo !== false);
+        if (p) return { bolao: b, participante: p };
+      }
+      return null;
+    },
+    save: b   => { S.cache.boloesParcelados.unshift({ ...b, participantes:[] }); _api.post('/api/boloes-parcelados', b); },
+    del:  id  => { S.cache.boloesParcelados=S.cache.boloesParcelados.filter(b=>b.id!==id); _api.del('/api/boloes-parcelados/'+id); },
+    salvarParticipante: p => {
+      const b = S.cache.boloesParcelados.find(x=>x.id===p.bolao_parcelado_id);
+      if (b) (b.participantes = b.participantes||[]).push({ ...p, pagamentos: [] });
+      _api.post('/api/bolao-parcelado-participantes', p);
+    },
+    delParticipante: (bolaoId, id) => {
+      const b = S.cache.boloesParcelados.find(x=>x.id===bolaoId);
+      if (b) b.participantes = (b.participantes||[]).filter(p=>p.id!==id);
+      _api.del('/api/bolao-parcelado-participantes/'+id);
+    },
+    declararQuitacao: (participanteId, mes) => {
+      for (const b of (S.cache.boloesParcelados||[])) {
+        const p = (b.participantes||[]).find(x=>x.id===participanteId);
+        if (p) { p.mes_quitacao_previsto = mes; break; }
+      }
+      _api.put(`/api/bolao-parcelado-participantes/${participanteId}/quitacao`, { mes_quitacao_previsto: mes });
+    },
+    enviarComprovante: pg => {
+      for (const b of (S.cache.boloesParcelados||[])) {
+        const p = (b.participantes||[]).find(x=>x.id===pg.participante_id);
+        if (p) {
+          p.pagamentos = p.pagamentos || [];
+          const i = p.pagamentos.findIndex(x=>x.mes===pg.mes);
+          if (i>=0) p.pagamentos[i] = pg; else p.pagamentos.push(pg);
+          break;
+        }
+      }
+      _api.post('/api/bolao-parcelado-pagamentos', pg);
+    },
+    // Confirmar/rejeitar é rota própria protegida (admin) — atualiza local e chama a rota de status.
+    confirmarPagamento: (pagamentoId, status) => {
+      for (const b of (S.cache.boloesParcelados||[])) {
+        for (const p of (b.participantes||[])) {
+          const pg = (p.pagamentos||[]).find(x=>x.id===pagamentoId);
+          if (pg) {
+            pg.status = status;
+            pg.confirmado_em = status==='confirmado' ? new Date().toISOString() : null;
+            if (status==='confirmado' && p.mes_quitacao_previsto === pg.mes) {
+              p.quitado = true; p.quitado_em = new Date().toISOString();
+            }
+          }
+        }
+      }
+      _api.put(`/api/bolao-parcelado-pagamentos/${pagamentoId}/status`, { status });
+    },
   },
   ctrl: {
     get: ()  => S.cache.ctrl || { bloqueado:false, msg:'', cliente:'Demo', licenca:'DEMO-2024', validade:'2025-12-31', logs:[] },
@@ -718,6 +798,7 @@ const R = {
         <span class="bac-seta">›</span>
       </div>
       <div id="minha-participacao"></div>
+      <div id="anual-card-slot"></div>
 
       <div class="sectt mb8">Loterias — ao vivo</div>
       <div class="grid-lt mb4">
@@ -755,6 +836,113 @@ const R = {
 
     R._hRender(S._hLt);
     R._renderBoloesAtivos();
+    R._renderAnualCard();
+  },
+
+  // Card "Bolão Anual" na Home — diferente do "Bolões Ativos" (sempre visível), só aparece se o
+  // telefone do cliente bater com algum participante de bolão parcelado (evita poluir a Home de
+  // quem não participa de nenhum).
+  _renderAnualCard() {
+    const slot = $('anual-card-slot'); if (!slot) return;
+    const info = DB.boloesParcelados.minhaParticipacao();
+    if (!info) { slot.innerHTML = ''; return; }
+    const { bolao, participante } = info;
+    const pagos = (participante.pagamentos||[]).filter(p=>p.status==='confirmado').length;
+    const statusTxt = participante.quitado ? '💰 Quitado' : `${pagos}/${bolao.duracao_meses} meses pagos`;
+    slot.innerHTML = `
+      <div class="boloes-ativos-card" style="border-color:var(--gold)" onclick="R.ir('meuAnual')">
+        <div class="bac-emoji">📅</div>
+        <div class="bac-info">
+          <div class="bac-titulo">${bolao.nome}</div>
+          <div class="bac-sub">${statusTxt}</div>
+        </div>
+        <span class="bac-seta">›</span>
+      </div>`;
+  },
+
+  // ---- MEU BOLÃO ANUAL (cliente) ----
+  _meuAnual() {
+    const info = DB.boloesParcelados.minhaParticipacao();
+    if (!info) { R.ir('home'); return; }
+    const { bolao:b, participante:p } = info;
+    $('h-title').textContent = b.nome;
+    const meses = Array.from({length:b.duracao_meses}, (_,i)=>i+1);
+    const pagos = (p.pagamentos||[]).filter(pg=>pg.status==='confirmado').length;
+
+    $('view-meuAnual').innerHTML = `
+      <div class="card mb16">
+        <div class="fxb mb8"><div style="font-weight:700">${b.nome}</div>${p.quitado?'<span class="badge b-pago">💰 Quitado</span>':''}</div>
+        <div class="txs muted mb8">${fmt$(b.valor_mensal)}/mês × ${b.duracao_meses} = ${fmt$(b.valor_total)}</div>
+        <div class="txs muted">${pagos}/${b.duracao_meses} meses pagos</div>
+      </div>
+      <div class="anual-tbl-wrap">
+        <table class="anual-tbl">
+          <thead><tr>${meses.map(m=>`<th>${MESES_NOMES[m-1].slice(0,3)}</th>`).join('')}</tr></thead>
+          <tbody><tr>${meses.map(m=>{ const c=R._anualCelula(b,p,m); return `<td class="${c.cls}" title="${c.titulo}">${c.icon}</td>`; }).join('')}</tr></tbody>
+        </table>
+      </div>
+      ${!p.quitado ? `
+      <button class="btn btn-p btn-f mb8" onclick="R._mCompAnual()">📎 Enviar comprovante</button>
+      ${!p.mes_quitacao_previsto
+        ? `<button class="btn btn-o btn-f" onclick="R._mQuitacaoAnual()">💰 Declarar quitação</button>`
+        : `<div class="txs muted tc mt8">Quitação prevista para ${MESES_NOMES[p.mes_quitacao_previsto-1]}.</div>`}
+      ` : ''}`;
+  },
+  _mCompAnual() {
+    MODAL.open(`
+      <div class="m-title">📎 Enviar comprovante</div>
+      <div class="fg"><label>Mês de referência</label><input id="ca-mes" type="text" placeholder="Ex: mês de julho, mês 07, 07"></div>
+      <div class="fg"><label>Comprovante</label><input id="ca-file" type="file" accept="image/*" onchange="R._prevCompAnual(this)"></div>
+      <img id="ca-th" style="display:none;width:100%;border-radius:8px;margin:8px 0">
+      <button class="btn btn-p btn-f" onclick="R._envCompAnual()">Enviar</button>`);
+  },
+  _prevCompAnual(input) {
+    const f=input.files?.[0]; if(!f) return;
+    const rd=new FileReader();
+    rd.onload=e=>{const img=$('ca-th');img.src=e.target.result;img.style.display='block';};
+    rd.readAsDataURL(f);
+  },
+  _envCompAnual() {
+    const info = DB.boloesParcelados.minhaParticipacao();
+    if (!info) return;
+    const { bolao:b, participante:p } = info;
+    const texto = $('ca-mes')?.value?.trim();
+    const mes = parseMesReferencia(texto);
+    if (!mes) { TOAST.show('Mês de referência, por favor.', 'err'); return; }
+    // Primeiro mês ainda não pago — se o mês digitado não bater, avisa (pode ser erro de digitação).
+    const abertos = Array.from({length:b.duracao_meses},(_,i)=>i+1).filter(m => {
+      const pg=(p.pagamentos||[]).find(x=>x.mes===m);
+      return !pg || pg.status!=='confirmado';
+    });
+    const primeiroAberto = abertos[0];
+    if (primeiroAberto && mes !== primeiroAberto) {
+      TOAST.show(`Você está com o mês de ${MESES_NOMES[primeiroAberto-1]} em aberto. Se for erro de digitação, volte a corrigir o mês ou entre em contato com o administrador do grupo.`, 'err');
+      return;
+    }
+    DB.boloesParcelados.enviarComprovante({ id:uid(), participante_id:p.id, mes, valor:b.valor_mensal, comprovante:$('ca-th')?.src||null, status:'pendente', enviado_em:new Date().toISOString() });
+    MODAL.close();
+    R._meuAnual();
+    TOAST.show('📎 Comprovante enviado! Aguarde confirmação.', 'ok');
+  },
+  _mQuitacaoAnual() {
+    const info = DB.boloesParcelados.minhaParticipacao();
+    if (!info) return;
+    const { bolao:b } = info;
+    const meses = Array.from({length:b.duracao_meses}, (_,i)=>i+1);
+    MODAL.open(`
+      <div class="m-title">💰 Declarar quitação</div>
+      <p class="txs muted mb8">Escolha em qual mês você pretende pagar o valor total (${fmt$(b.valor_total)}) de uma vez.</p>
+      <div class="fg"><select id="ca-mes-quit">${meses.map(m=>`<option value="${m}">${MESES_NOMES[m-1]}</option>`).join('')}</select></div>
+      <button class="btn btn-p btn-f" onclick="R._salvarQuitacaoAnual()">Confirmar</button>`);
+  },
+  _salvarQuitacaoAnual() {
+    const info = DB.boloesParcelados.minhaParticipacao();
+    if (!info) return;
+    const mes = +$('ca-mes-quit').value;
+    DB.boloesParcelados.declararQuitacao(info.participante.id, mes);
+    MODAL.close();
+    R._meuAnual();
+    TOAST.show('💰 Quitação declarada! Envie o comprovante desse mês quando for pagar.', 'ok');
   },
 
   async _renderBoloesAtivos() {
@@ -1503,6 +1691,7 @@ const R = {
         <div class="amenu-c" onclick="R.ir('boloes')"><span class="amenu-i">🎲</span><div class="amenu-n">Bolões</div></div>
         <div class="amenu-c" onclick="R.ir('usuarios')"><span class="amenu-i">👥</span><div class="amenu-n">Usuários <span style="font-size:.65rem;background:var(--primary);color:#000;border-radius:10px;padding:1px 5px;margin-left:2px">${qtUsr}</span></div></div>
         <div class="amenu-c" onclick="R.ir('premiacao')"><span class="amenu-i">🏆</span><div class="amenu-n">Premiação</div></div>
+        <div class="amenu-c" onclick="R.ir('anual')"><span class="amenu-i">📅</span><div class="amenu-n">Bolão Anual</div></div>
         ${isdev?`<div class="amenu-c" style="border-color:var(--red)" onclick="R.ir('controle')"><span class="amenu-i">🔒</span><div class="amenu-n" style="color:var(--red)">Controle Dev</div></div>`:''}
       </div>
       ${TEMA.renderSeletor()}`;
@@ -1728,6 +1917,202 @@ const R = {
     if (!confirm('Excluir essa premiação?')) return;
     DB.premiacoes.del(id);
     R._premiacao();
+  },
+
+  // ---- BOLÃO ANUAL/PARCELADO (admin) ----
+  _anual() {
+    if(!AUTH.isAdmin()){R.ir('home');return;}
+    $('h-title').textContent='Bolão Anual';
+    const lista = DB.boloesParcelados.list();
+    $('view-anual').innerHTML = `
+      <div class="fxb mb12">
+        <div class="sectt">Bolões parcelados (${lista.length})</div>
+        <button class="btn btn-p btn-sm" onclick="R._mNovoAnual()">+ Novo</button>
+      </div>
+      <div class="card">
+        ${!lista.length
+          ? '<div class="empty"><div class="ei">📅</div><p>Nenhum bolão parcelado cadastrado ainda.</p></div>'
+          : lista.map(b=>{
+            const n=(b.participantes||[]).length;
+            return `<div class="user-card" style="cursor:pointer" onclick="R._irAnualDet('${b.id}')">
+              <div class="user-avatar" style="background:var(--gold)">📅</div>
+              <div class="user-info">
+                <div class="user-nome">${b.nome}</div>
+                <div class="user-meta txs muted">${b.ano} · ${fmt$(b.valor_mensal)}/mês × ${b.duracao_meses} · ${n} participante${n!==1?'s':''}</div>
+              </div>
+              <div class="user-acts"><button class="btn btn-d btn-sm" onclick="event.stopPropagation();R._delAnual('${b.id}')">✕</button></div>
+            </div>`;
+          }).join('')}
+      </div>`;
+  },
+  _mNovoAnual() {
+    MODAL.open(`
+      <div class="m-title">📅 Novo Bolão Anual</div>
+      <div class="fg"><label>Nome</label><input id="an-nome" placeholder="Ex: Mega da Virada 2027"></div>
+      <div class="fr">
+        <div class="fg"><label>Ano</label><input id="an-ano" type="number" value="${new Date().getFullYear()}"></div>
+        <div class="fg"><label>Duração (meses)</label><input id="an-dur" type="number" value="12" oninput="R._anCalcTotal()"></div>
+      </div>
+      <div class="fr">
+        <div class="fg"><label>Valor mensal (R$)</label><input id="an-mensal" type="number" step="0.01" placeholder="85.00" oninput="R._anCalcTotal()"></div>
+        <div class="fg"><label>Valor total (R$)</label><input id="an-total" type="number" step="0.01" placeholder="1020.00"></div>
+      </div>
+      <button class="btn btn-p btn-f mt8" onclick="R._salvarAnual()">📅 Cadastrar bolão</button>
+      <div class="txs muted mt8">Valor total calculado automaticamente (mensal × duração) — editável se precisar ajustar arredondamento.</div>
+    `);
+  },
+  _anCalcTotal() {
+    const mensal = +$('an-mensal')?.value || 0, dur = +$('an-dur')?.value || 0;
+    if ($('an-total')) $('an-total').value = (mensal*dur).toFixed(2);
+  },
+  _salvarAnual() {
+    const nome = $('an-nome').value.trim();
+    const ano = +$('an-ano').value || new Date().getFullYear();
+    const dur = +$('an-dur').value || 12;
+    const mensal = +$('an-mensal').value || 0;
+    const total = +$('an-total').value || (mensal*dur);
+    if (!nome) { TOAST.show('Informe o nome do bolão.', 'err'); return; }
+    DB.boloesParcelados.save({ id:uid(), nome, ano, valor_mensal:mensal, duracao_meses:dur, valor_total:total, status:'ativo', criado:hoje() });
+    MODAL.close();
+    R._anual();
+    TOAST.show('📅 Bolão cadastrado!', 'ok');
+  },
+  _delAnual(id) {
+    if (!confirm('Excluir esse bolão e todos os participantes/pagamentos?')) return;
+    DB.boloesParcelados.del(id);
+    R._anual();
+  },
+
+  _irAnualDet(id) { S.anualAtual=id; R.ir('anualDet'); },
+
+  // Um mês "passou" se o ano do bolão já ficou pra trás, ou é o ano atual e o mês já ficou pra
+  // trás — usado tanto pra classificar inadimplência quanto pra colorir a planilha.
+  _anualMesPassou(b, m) {
+    const agora = new Date();
+    return b.ano < agora.getFullYear() || (b.ano === agora.getFullYear() && m < agora.getMonth()+1);
+  },
+  _anualStatusParticipante(b, p) {
+    if (p.quitado) return 'quitado';
+    for (let m=1; m<=b.duracao_meses; m++) {
+      if (!R._anualMesPassou(b, m)) continue;
+      const pg = (p.pagamentos||[]).find(x=>x.mes===m);
+      if (!pg || pg.status!=='confirmado') return 'inadimplente';
+    }
+    return 'em_dia';
+  },
+  _anualCelula(b, p, m) {
+    if (p.quitado) return { icon:'💰', cls:'cel-quitado', titulo:'Quitado' };
+    const pg = (p.pagamentos||[]).find(x=>x.mes===m);
+    if (pg?.status==='confirmado') return { icon:'✅', cls:'cel-pago', titulo:'Pago', id:pg.id };
+    if (pg?.status==='pendente')   return { icon:'⏳', cls:'cel-pend', titulo:'Aguardando confirmação', id:pg.id };
+    if (pg?.status==='rejeitado')  return { icon:'🔴', cls:'cel-atraso', titulo:'Comprovante rejeitado', id:pg.id };
+    if (R._anualMesPassou(b, m))   return { icon:'🔴', cls:'cel-atraso', titulo:'Inadimplente' };
+    return { icon:'—', cls:'cel-futuro', titulo:'Ainda não venceu' };
+  },
+  _anualDet() {
+    if(!AUTH.isAdmin()){R.ir('home');return;}
+    const b = DB.boloesParcelados.get(S.anualAtual);
+    if (!b) { R.ir('anual'); return; }
+    $('h-title').textContent = b.nome;
+    const parts = b.participantes||[];
+    const meses = Array.from({length:b.duracao_meses}, (_,i)=>i+1);
+
+    const qtd = { quitado:0, em_dia:0, inadimplente:0 };
+    parts.forEach(p => qtd[R._anualStatusParticipante(b,p)]++);
+    const arrecadado = parts.reduce((s,p)=>s+(p.pagamentos||[]).filter(pg=>pg.status==='confirmado').reduce((s2,pg)=>s2+(pg.valor||0),0), 0);
+    const esperado = b.valor_total * parts.length;
+
+    $('view-anualDet').innerHTML = `
+      <div class="stat-row">
+        <div class="stat-card"><div class="sv">${fmt$(arrecadado)}</div><div class="sl">Arrecadado</div></div>
+        <div class="stat-card"><div class="sv">${fmt$(esperado)}</div><div class="sl">Esperado</div></div>
+        <div class="stat-card"><div class="sv">${parts.length}</div><div class="sl">Participantes</div></div>
+      </div>
+      <div class="fxb mb8 mt12">
+        <div class="sectt">Planilha (${b.ano})</div>
+        <button class="btn btn-p btn-sm" onclick="R._mNovoParticipanteAnual()">+ Participante</button>
+      </div>
+      <div class="anual-tbl-wrap">
+        <table class="anual-tbl">
+          <thead><tr><th>Participante</th>${meses.map(m=>`<th>${MESES_NOMES[m-1].slice(0,3)}</th>`).join('')}<th></th></tr></thead>
+          <tbody>
+            ${!parts.length ? `<tr><td colspan="${meses.length+2}" class="tc muted" style="padding:20px 0">Nenhum participante cadastrado.</td></tr>` : parts.map(p => `
+              <tr>
+                <td>${p.nome}<div class="txs muted">${p.fone}</div></td>
+                ${meses.map(m => { const c=R._anualCelula(b,p,m); return `<td class="${c.cls}" title="${c.titulo}" ${c.id?`onclick="R._verPagAnual('${c.id}')"`:''}>${c.icon}</td>`; }).join('')}
+                <td><button class="btn-ico" title="Remover" onclick="R._delParticipanteAnual('${p.id}')">✕</button></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="sectt mb8 mt16">Situação dos participantes</div>
+      <div class="chart-w"><canvas id="chart-anual-status"></canvas></div>
+      <div class="sectt mb8 mt16">Arrecadado × Esperado</div>
+      <div class="chart-w"><canvas id="chart-anual-prog"></canvas></div>`;
+
+    setTimeout(() => {
+      ['anualStatus','anualProgresso'].forEach(k=>{ S.charts[k]?.destroy?.(); delete S.charts[k]; });
+      const ctx1 = $('chart-anual-status');
+      if (ctx1) S.charts.anualStatus = new Chart(ctx1, { type:'bar', data:{
+        labels:['Quitados','Em dia','Inadimplentes'],
+        datasets:[{ data:[qtd.quitado, qtd.em_dia, qtd.inadimplente], backgroundColor:['#f59e0bcc','#10b981cc','#ef4444cc'], borderRadius:6 }]
+      }, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+        scales:{ x:{ticks:{color:'#94a3b8'},grid:{display:false}}, y:{ticks:{color:'#94a3b8',stepSize:1},grid:{color:'#334155'}} } } });
+      const ctx2 = $('chart-anual-prog');
+      if (ctx2) S.charts.anualProgresso = new Chart(ctx2, { type:'bar', data:{
+        labels:['Arrecadado','Esperado'],
+        datasets:[{ data:[arrecadado, esperado], backgroundColor:['#10b981cc','#334155cc'], borderRadius:6 }]
+      }, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+        scales:{ x:{ticks:{color:'#94a3b8'},grid:{display:false}}, y:{ticks:{color:'#94a3b8',callback:v=>'R$'+(v>=1000?(v/1000).toFixed(0)+'k':v)},grid:{color:'#334155'}} } } });
+    }, 60);
+  },
+  _mNovoParticipanteAnual() {
+    const dl = DB.usuarios.list().map(u=>`<option value="${u.nome}">`).join('');
+    MODAL.open(`
+      <div class="m-title">👤 Novo participante</div>
+      <div class="fg"><label>Nome completo</label><input id="ap-nome" list="dl-ap-anual" placeholder="Nome completo" oninput="R._anAutoFone(this.value)">
+      <datalist id="dl-ap-anual">${dl}</datalist></div>
+      <div class="fg"><label>Telefone (DDD)</label><input id="ap-fone" type="tel" placeholder="(61) 99999-9999"></div>
+      <button class="btn btn-p btn-f mt8" onclick="R._salvarParticipanteAnual()">Adicionar</button>
+    `);
+  },
+  _anAutoFone(nome) {
+    const u = DB.usuarios.find((nome||'').trim());
+    if (u && u.fone) $('ap-fone').value = u.fone;
+  },
+  _salvarParticipanteAnual() {
+    const nome = $('ap-nome').value.trim();
+    const foneDigitado = $('ap-fone').value.trim();
+    if (!nome) { TOAST.show('Informe o nome.', 'err'); return; }
+    if (foneDigitado.replace(/\D/g,'').length < 10) { TOAST.show('Informe um telefone válido com DDD.', 'err'); return; }
+    DB.boloesParcelados.salvarParticipante({ id:uid(), bolao_parcelado_id:S.anualAtual, nome, fone:normalizarFone(foneDigitado) });
+    MODAL.close();
+    R._anualDet();
+    TOAST.show('👤 Participante adicionado!', 'ok');
+  },
+  _delParticipanteAnual(id) {
+    if (!confirm('Remover esse participante e todo o histórico de pagamentos dele?')) return;
+    DB.boloesParcelados.delParticipante(S.anualAtual, id);
+    R._anualDet();
+  },
+  _verPagAnual(id) {
+    const b = DB.boloesParcelados.get(S.anualAtual);
+    let pg=null, part=null;
+    for (const p of (b?.participantes||[])) { const f=(p.pagamentos||[]).find(x=>x.id===id); if (f) { pg=f; part=p; break; } }
+    if (!pg) return;
+    MODAL.open(`
+      <div class="m-title">📎 ${part.nome} — ${MESES_NOMES[pg.mes-1]}</div>
+      ${pg.comprovante ? `<img src="${pg.comprovante}" style="width:100%;border-radius:8px;margin-bottom:10px">` : '<p class="txs muted">Sem imagem anexada.</p>'}
+      <div class="txs muted mb8">${fmt$(pg.valor)} · status: ${pg.status}</div>
+      ${pg.status!=='confirmado' ? `<button class="btn btn-p btn-f mb8" onclick="R._confirmarPagAnual('${id}','confirmado')">✓ Confirmar pagamento</button>` : ''}
+      ${pg.status!=='rejeitado' ? `<button class="btn btn-d btn-f" onclick="R._confirmarPagAnual('${id}','rejeitado')">✗ Rejeitar</button>` : ''}
+    `);
+  },
+  _confirmarPagAnual(id, status) {
+    DB.boloesParcelados.confirmarPagamento(id, status);
+    MODAL.close();
+    R._anualDet();
+    TOAST.show(status==='confirmado' ? '✓ Pagamento confirmado!' : 'Comprovante rejeitado.', status==='confirmado'?'ok':'err');
   },
 
   async _importarWA(grupoId, jid) {

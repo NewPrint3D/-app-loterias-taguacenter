@@ -539,6 +539,16 @@ input:checked + .sl2::before { transform: translateX(19px); }
 /* ---- CHART ---- */
 .chart-w { position: relative; height: 210px; margin-bottom: 14px; }
 
+/* ---- BOLÃO ANUAL — planilha ---- */
+.anual-tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--rsm); margin-bottom: 16px; }
+.anual-tbl { border-collapse: collapse; width: 100%; font-size: .78rem; white-space: nowrap; }
+.anual-tbl th, .anual-tbl td { padding: 8px 10px; text-align: center; border-bottom: 1px solid var(--border); }
+.anual-tbl th { background: var(--bg3); color: var(--muted); font-weight: 600; font-size: .72rem; }
+.anual-tbl td:first-child, .anual-tbl th:first-child { text-align: left; position: sticky; left: 0; background: var(--bg2); }
+.anual-tbl tbody tr:last-child td { border-bottom: none; }
+.anual-tbl td.cel-pago, .anual-tbl td.cel-pend, .anual-tbl td.cel-atraso, .anual-tbl td.cel-quitado { cursor: pointer; }
+.anual-tbl td.cel-futuro { color: var(--border); }
+
 /* ---- DESTINATÁRIOS WHATSAPP ---- */
 .dest-tabs  { display: flex; gap: 6px; }
 .dtab       { flex: 1; padding: 8px 4px; border: 1px solid var(--border); border-radius: var(--rsm);

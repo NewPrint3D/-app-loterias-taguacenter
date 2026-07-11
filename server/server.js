@@ -44,7 +44,7 @@ const assinarToken = role => jwt.sign({ role }, JWT_SECRET, { expiresIn: JWT_EXP
 
 // Rotas de escrita usadas por quem não tem login (cliente sem senha) — ficam de fora do gate.
 // Toda rota pública nova precisa ser adicionada aqui E comentada no próprio app.post/put dela.
-const ROTAS_ESCRITA_PUBLICAS = new Set(['/api/auth/login', '/api/pagamentos', '/api/config/log', '/api/usuarios/registrar']);
+const ROTAS_ESCRITA_PUBLICAS = new Set(['/api/auth/login', '/api/pagamentos', '/api/config/log', '/api/usuarios/registrar', '/api/bolao-parcelado-pagamentos']);
 
 // Cliente (nome+telefone, sem token) reserva a cota e anexa o comprovante -- essas duas rotas de
 // cota precisam ficar publicas. Reservar e atomico (so pega se estiver 'livre') e anexar so
@@ -55,6 +55,7 @@ function ehRotaEscritaPublica(path) {
   if (ROTAS_ESCRITA_PUBLICAS.has(path)) return true;
   if (/^\/api\/cotas\/[^/]+\/(reservar|comprovante)$/.test(path)) return true;
   if (/^\/api\/premiacoes\/[^/]+\/confirmar$/.test(path)) return true;
+  if (/^\/api\/bolao-parcelado-participantes\/[^/]+\/quitacao$/.test(path)) return true;
   return false;
 }
 
@@ -638,6 +639,120 @@ app.delete('/api/premiacoes/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- BOLÃO ANUAL/PARCELADO ----
+// Devolve todos os bolões com participantes e pagamentos aninhados (mesmo padrão de /api/lotes).
+app.get('/api/boloes-parcelados', async (req, res) => {
+  try {
+    const { rows: boloes } = await pool.query('SELECT * FROM boloes_parcelados ORDER BY criado DESC');
+    const { rows: participantes } = await pool.query('SELECT * FROM bolao_parcelado_participantes ORDER BY criado ASC');
+    const { rows: pagamentos } = await pool.query('SELECT * FROM bolao_parcelado_pagamentos ORDER BY mes ASC');
+    const pagsPorParticipante = {};
+    pagamentos.forEach(p => { (pagsPorParticipante[p.participante_id] = pagsPorParticipante[p.participante_id] || []).push(p); });
+    const partsPorBolao = {};
+    participantes.forEach(p => {
+      (partsPorBolao[p.bolao_parcelado_id] = partsPorBolao[p.bolao_parcelado_id] || [])
+        .push({ ...p, pagamentos: pagsPorParticipante[p.id] || [] });
+    });
+    res.json(boloes.map(b => ({ ...b, participantes: partsPorBolao[b.id] || [] })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/boloes-parcelados', async (req, res) => {
+  const { id, nome, ano, valor_mensal, duracao_meses, valor_total } = req.body;
+  if (!id || !nome || !ano) return res.status(400).json({ ok: false, error: 'Informe nome e ano.' });
+  try {
+    await pool.query(
+      `INSERT INTO boloes_parcelados(id,nome,ano,valor_mensal,duracao_meses,valor_total,status,criado)
+       VALUES($1,$2,$3,$4,$5,$6,'ativo',NOW())`,
+      [id, String(nome).trim().slice(0, 80), +ano, +valor_mensal || 0, +duracao_meses || 12, +valor_total || 0]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.delete('/api/boloes-parcelados/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM boloes_parcelados WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/bolao-parcelado-participantes', async (req, res) => {
+  const { id, bolao_parcelado_id, nome, fone } = req.body;
+  if (!id || !bolao_parcelado_id || !nome || !fone) return res.status(400).json({ ok: false, error: 'Dados incompletos.' });
+  try {
+    await pool.query(
+      `INSERT INTO bolao_parcelado_participantes(id,bolao_parcelado_id,nome,fone,ativo,criado)
+       VALUES($1,$2,$3,$4,true,NOW())`,
+      [id, bolao_parcelado_id, String(nome).trim().slice(0, 80), normalizarFoneServidor(fone)]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.delete('/api/bolao-parcelado-participantes/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM bolao_parcelado_participantes WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PÚBLICA (em ehRotaEscritaPublica) — cliente sem token declara em qual mês pretende quitar tudo
+// de uma vez (só grava a intenção; a confirmação de fato acontece quando o admin aprova o
+// comprovante daquele mês — ver PUT /api/bolao-parcelado-pagamentos/:id/status).
+app.put('/api/bolao-parcelado-participantes/:id/quitacao', async (req, res) => {
+  const { mes_quitacao_previsto } = req.body;
+  const mes = parseInt(mes_quitacao_previsto, 10);
+  if (!mes || mes < 1 || mes > 12) return res.status(400).json({ ok: false, error: 'Mês inválido.' });
+  try {
+    await pool.query(`UPDATE bolao_parcelado_participantes SET mes_quitacao_previsto=$1 WHERE id=$2`, [mes, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// PÚBLICA (em ehRotaEscritaPublica) — cliente sem token envia comprovante do mês. Força
+// status='pendente' no servidor independente do corpo (mesmo padrão defensivo de /api/pagamentos).
+// ON CONFLICT atualiza em vez de duplicar — reenviar o comprovante do mesmo mês substitui o anterior.
+app.post('/api/bolao-parcelado-pagamentos', async (req, res) => {
+  const { id, participante_id, mes, valor, comprovante } = req.body;
+  const m = parseInt(mes, 10);
+  if (!id || !participante_id || !m || m < 1 || m > 12) return res.status(400).json({ ok: false, error: 'Dados incompletos.' });
+  try {
+    await pool.query(
+      `INSERT INTO bolao_parcelado_pagamentos(id,participante_id,mes,valor,comprovante,status,enviado_em)
+       VALUES($1,$2,$3,$4,$5,'pendente',NOW())
+       ON CONFLICT(participante_id,mes) DO UPDATE SET valor=$4, comprovante=$5, status='pendente', enviado_em=NOW(), confirmado_em=NULL`,
+      [id, participante_id, m, +valor || 0, comprovante || null]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Admin confirma/rejeita um comprovante mensal. Se confirmado e o mês bater com o mês de
+// quitação previsto do participante, marca o participante inteiro como quitado.
+app.put('/api/bolao-parcelado-pagamentos/:id/status', async (req, res) => {
+  const { status } = req.body;
+  if (!['pendente', 'confirmado', 'rejeitado'].includes(status)) {
+    return res.status(400).json({ ok: false, error: 'Status inválido.' });
+  }
+  try {
+    const confirmadoEm = status === 'confirmado' ? 'NOW()' : 'NULL';
+    const { rows } = await pool.query(
+      `UPDATE bolao_parcelado_pagamentos SET status=$1, confirmado_em=${confirmadoEm} WHERE id=$2 RETURNING participante_id, mes`,
+      [status, req.params.id]
+    );
+    if (status === 'confirmado' && rows.length) {
+      const { participante_id, mes } = rows[0];
+      await pool.query(
+        `UPDATE bolao_parcelado_participantes SET quitado=true, quitado_em=NOW()
+         WHERE id=$1 AND mes_quitacao_previsto=$2`,
+        [participante_id, mes]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // ---- CONFIG ----
 app.get('/api/config', async (req, res) => {
   try {
@@ -807,6 +922,53 @@ const _migracaoPremiacoes = pool.query(`CREATE TABLE IF NOT EXISTS premiacoes (
   confirmada_em TIMESTAMPTZ,
   criado TIMESTAMPTZ DEFAULT NOW()
 )`).catch(e => console.error('ERRO criando tabela premiacoes:', e.message));
+
+// ---- BOLÃO ANUAL/PARCELADO ----
+// Sistema genérico de bolões com arrecadação mensal (ex: Mega da Virada): admin cria o bolão
+// (valor mensal x duração), adiciona participantes, e cada um paga mês a mês OU declara que vai
+// quitar tudo de uma vez num mês escolhido (mes_quitacao_previsto). Mês sempre é mês CALENDÁRIO
+// (1=janeiro...12=dezembro), independente de quando o bolão começou.
+const _migracaoBoloesParcelados = (async () => {
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS boloes_parcelados (
+      id TEXT PRIMARY KEY,
+      nome TEXT NOT NULL,
+      ano INTEGER NOT NULL,
+      valor_mensal NUMERIC DEFAULT 0,
+      duracao_meses INTEGER DEFAULT 12,
+      valor_total NUMERIC DEFAULT 0,
+      status TEXT DEFAULT 'ativo',
+      criado TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS bolao_parcelado_participantes (
+      id TEXT PRIMARY KEY,
+      bolao_parcelado_id TEXT REFERENCES boloes_parcelados(id) ON DELETE CASCADE,
+      nome TEXT NOT NULL,
+      fone TEXT NOT NULL,
+      quitado BOOLEAN DEFAULT false,
+      mes_quitacao_previsto INTEGER,
+      quitado_em TIMESTAMPTZ,
+      ativo BOOLEAN DEFAULT true,
+      criado TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS bolao_parcelado_pagamentos (
+      id TEXT PRIMARY KEY,
+      participante_id TEXT REFERENCES bolao_parcelado_participantes(id) ON DELETE CASCADE,
+      mes INTEGER NOT NULL,
+      valor NUMERIC DEFAULT 0,
+      comprovante TEXT,
+      status TEXT DEFAULT 'pendente',
+      enviado_em TIMESTAMPTZ DEFAULT NOW(),
+      confirmado_em TIMESTAMPTZ,
+      UNIQUE(participante_id, mes)
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bpp_bolao ON bolao_parcelado_participantes(bolao_parcelado_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bppag_part ON bolao_parcelado_pagamentos(participante_id)`);
+    console.log('Tabelas de Bolão Anual/Parcelado prontas.');
+  } catch (e) {
+    console.error('ERRO criando tabelas de bolão parcelado:', e.message);
+  }
+})();
 
 async function pgAuthState() {
   await pool.query(`CREATE TABLE IF NOT EXISTS wpp_auth (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)`);
@@ -1707,6 +1869,6 @@ app.post('/api/resultados/relay', async (req, res) => {
 
 // Só aceita conexões depois que a migração crítica (grupo_id) terminar — elimina a janela onde
 // uma requisição POST /api/boloes podia chegar antes da coluna existir de verdade no banco.
-Promise.all([_migracaoGrupoId, _migracaoCotasAoVivo, _migracaoPremiacoes]).finally(() => {
+Promise.all([_migracaoGrupoId, _migracaoCotasAoVivo, _migracaoPremiacoes, _migracaoBoloesParcelados]).finally(() => {
   app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));
 });
