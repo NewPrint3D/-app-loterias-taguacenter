@@ -259,13 +259,8 @@ body {
 .pag-nm { font-weight: 600; font-size: .88rem; }
 .comp-img { width:100%; border-radius:var(--rsm); margin-top:8px; max-height:200px; object-fit:contain; }
 
-/* ---- PALPITEIRO MASCOTE (dentro da barra de nav) ---- */
-#ze {
-  position: fixed;
-  bottom: calc(var(--nh)/2 - 14px); /* centralizado na altura do nav */
-  right: 14px;
-  z-index: 110; cursor: pointer;
-}
+/* ---- PALPITEIRO MASCOTE — bolinha do número, agora dentro do card Bolões Ativos ---- */
+.bac-bola { display: inline-flex; vertical-align: middle; margin-left: 8px; }
 .ze-bola {
   width: 28px; height: 28px;
   background: radial-gradient(circle at 32% 28%, #ffffff, #c8d5e8);
@@ -287,16 +282,6 @@ body {
   transition: opacity .15s;
   user-select: none;
 }
-.ze-fala {
-  position: absolute; bottom: 34px; right: 0;
-  background: #fff; color: #1e293b;
-  border-radius: 12px 12px 2px 12px;
-  padding: 8px 11px; font-size: .75rem; font-weight: 500;
-  width: 180px; line-height: 1.4;
-  box-shadow: 0 4px 16px rgba(0,0,0,.4); display: none;
-}
-.ze-fala.on { display: block; animation: fala-in .2s ease; }
-@keyframes fala-in { from{opacity:0;transform:scale(.8) translateY(6px)} to{opacity:1;transform:none} }
 
 /* ---- APOSTADOR: SAUDAÇÃO ---- */
 .ug-box   { margin-bottom: 18px; }

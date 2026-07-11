@@ -44,7 +44,7 @@
 
     <div class="field" id="field-senha" hidden>
       <label>Senha do administrador</label>
-      <input id="inp-p" type="password" placeholder="••••••••"
+      <input id="inp-p" type="text" autocomplete="off" placeholder="Senha"
              onkeydown="if(event.key==='Enter')AUTH.entrar()">
     </div>
 
@@ -88,29 +88,24 @@
     <div id="view-controle"    class="view" hidden></div>
   </main>
 
-  <!-- Mascote Palpiteiro (dentro da área do nav) -->
-  <div id="ze" onclick="ZE.proximo()">
-    <div class="ze-bola" id="ze-bola">
-      <span class="ze-num" id="ze-num">13</span>
-    </div>
-    <div class="ze-fala" id="ze-txt"></div>
-  </div>
+  <!-- A bolinha do Palpiteiro (número girando) mudou de lugar — agora vive dentro do card
+       "Bolões Ativos" da Home (ver R._homeUser em js/app.js), não mais flutuando aqui. -->
 
   <!-- Nav apostador (usuário simples) -->
   <nav id="nav-user" hidden>
-    <button class="nb on" data-v="home"   onclick="R.ir('home')">🏠<span>Início</span></button>
-    <button class="nb"    data-v="cotas"  onclick="R.ir('cotas')">🎟️<span>Cotas</span></button>
-    <button class="nb"    data-v="ia"     onclick="R.ir('ia')">🎯<span>Palpiteiro</span></button>
-    <button class="nb"    data-v="perfil" onclick="R.ir('perfil')">👤<span>Conta</span></button>
+    <button class="nb on" data-v="home"   onclick="R.irTab('home')">🏠<span>Início</span></button>
+    <button class="nb"    data-v="cotas"  onclick="R.irTab('cotas')">🧾<span>Cotas</span></button>
+    <button class="nb"    data-v="ia"     onclick="R.irTab('ia')">🎯<span>Palpiteiro</span></button>
+    <button class="nb"    data-v="perfil" onclick="R.irTab('perfil')">👤<span>Conta</span></button>
   </nav>
 
   <!-- Nav admin / dev -->
   <nav id="nav-admin" hidden>
-    <button class="nb on" data-v="home"       onclick="R.ir('home')">🏠<span>Início</span></button>
-    <button class="nb"    data-v="grupos"     onclick="R.ir('grupos')">👥<span>Grupos</span></button>
-    <button class="nb"    data-v="resultados" onclick="R.ir('resultados')">📊<span>Result.</span></button>
-    <button class="nb"    data-v="admin"      onclick="R.ir('admin')">🛠️<span>Config.</span></button>
-    <button class="nb"    data-v="perfil"     onclick="R.ir('perfil')">👤<span>Conta</span></button>
+    <button class="nb on" data-v="home"       onclick="R.irTab('home')">🏠<span>Início</span></button>
+    <button class="nb"    data-v="grupos"     onclick="R.irTab('grupos')">👥<span>Grupos</span></button>
+    <button class="nb"    data-v="resultados" onclick="R.irTab('resultados')">📊<span>Result.</span></button>
+    <button class="nb"    data-v="admin"      onclick="R.irTab('admin')">🛠️<span>Config.</span></button>
+    <button class="nb"    data-v="perfil"     onclick="R.irTab('perfil')">👤<span>Conta</span></button>
   </nav>
 
 </div>

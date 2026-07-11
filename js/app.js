@@ -414,7 +414,7 @@ const AUTH = {
 
     DB.ctrl.log('Login: ' + (S.user.nome||S.user.login));
     ZE.start();
-    R.ir('home');
+    R.irTab('home');
     R._verificarPremios();
     R._verificarPremiacaoCliente();
     RELAY.verificarPendentes();
@@ -441,6 +441,7 @@ const AUTH = {
     sessionStorage.removeItem('ltr_s');
     _token.clear();
     S.user = null;
+    S.stack = [];
     $('shell').hidden = true;
     $('nav-user').hidden = true;
     $('nav-admin').hidden = true;
@@ -621,7 +622,7 @@ const ZE = {
   },
 
   show(txt) {
-    const el=$('ze-txt');
+    const el=$('ze-txt'); if(!el) return; // bolha de fala sem lugar fixo desde que a bolinha mudou pro card Bolões Ativos
     el.textContent=txt; el.className='ze-fala on';
     clearTimeout(ZE._t);
     ZE._t=setTimeout(()=>el.classList.remove('on'),4000);
@@ -640,8 +641,8 @@ const MODAL = {
 // ROUTER / RENDER
 // =============================================
 const R = {
-  ir(tela, params={}) {
-    if(S.tela&&S.tela!==tela) S.stack.push(S.tela);
+  ir(tela, params={}, opts={}) {
+    if(!opts.semPush && S.tela && S.tela!==tela) S.stack.push(S.tela);
     S.tela=tela;
     // Para o polling das cotas ao vivo ao sair da tela (o handler reinicia ao entrar)
     if(typeof COTAS!=='undefined' && tela!=='cotas' && tela!=='lotes') COTAS.parar();
@@ -650,12 +651,21 @@ const R = {
     // Atualiza botão ativo no nav correto
     const nav = AUTH.isAdmin() ? $('nav-admin') : $('nav-user');
     nav?.querySelectorAll('.nb').forEach(b=>b.classList.toggle('on',b.dataset.v===tela));
-    const noBack=['home','admin','resultados','perfil','controle','ia','grupos','cotas'];
-    $('btn-back').hidden=noBack.includes(tela);
+    // Seta de voltar aparece sempre que há pra onde voltar de verdade (pilha não vazia) — não
+    // depende mais de uma lista fixa de telas "principais", então funciona em qualquer tela
+    // alcançada por um card/link (ex: Bolões Ativos → Cotas), não só pelos ícones da barra.
+    $('btn-back').hidden = S.stack.length===0;
     const fn=R['_'+tela];
     if(fn) fn(params);
   },
-  voltar() { R.ir(S.stack.pop()||'home'); },
+  // Navegação pelos ícones da barra (superior/inferior) — reinicia a pilha, virando um novo
+  // "início" de navegação (por isso nunca mostra seta de voltar). R.ir() normal (usado por
+  // cards/links dentro das telas) empilha e permite voltar.
+  irTab(tela, params={}) {
+    S.stack = [];
+    R.ir(tela, params, {semPush:true});
+  },
+  voltar() { const t=S.stack.pop()||'home'; R.ir(t, {}, {semPush:true}); },
 
   // ---- HOME ----
   _home() {
@@ -707,7 +717,7 @@ const R = {
       </div>
 
       <div id="boloes-ativos-card" class="boloes-ativos-card" onclick="R.ir('cotas')">
-        <div class="bac-emoji">🎟️</div>
+        <div class="bac-emoji">🧾</div>
         <div class="bac-info">
           <div class="bac-titulo">Bolões Ativos</div>
           <div class="bac-sub" id="bac-sub">Carregando…</div>
@@ -759,9 +769,10 @@ const R = {
     if (S.tela !== 'home') return; // usuário já navegou pra outra tela enquanto carregava
     const ativos = lotes.filter(l => COTAS._ativo(l));
     const sub = $('bac-sub');
-    if (sub) sub.textContent = ativos.length
+    const bola = '<span class="bac-bola"><span class="ze-bola"><span class="ze-num" id="ze-num">13</span></span></span>';
+    if (sub) sub.innerHTML = (ativos.length
       ? ativos.length + ' bolão' + (ativos.length>1?'ões':'') + ' com cotas abertas agora!'
-      : 'Nenhum bolão ativo no momento — toque para conferir.';
+      : 'Nenhum bolão ativo no momento — toque para conferir.') + bola;
 
     let minha = null, loteMinha = null;
     for (const l of ativos) { const c = COTAS._minhaCota(l); if (c) { minha = c; loteMinha = l; break; } }
@@ -770,7 +781,7 @@ const R = {
       const statusTxt = { reservada:'⏳ aguardando pagamento', comprovante:'📎 aguardando confirmação', paga:'✅ pago' }[minha.status] || '';
       part.className = 'minha-participacao';
       part.onclick = () => R.ir('cotas');
-      part.innerHTML = '🎟️ Você tem a cota #' + minha.numero + ' em <strong>' + COTAS._esc(loteMinha.nome) + '</strong> — ' + statusTxt;
+      part.innerHTML = '🧾 Você tem a cota #' + minha.numero + ' em <strong>' + COTAS._esc(loteMinha.nome) + '</strong> — ' + statusTxt;
     } else {
       part.className = 'sem-participacao';
       part.onclick = () => R.ir('cotas');
@@ -1495,7 +1506,7 @@ const R = {
         <div class="amenu-c" onclick="R.ir('whatsapp')"><span class="amenu-i">${WPP_SVG(38)}</span><div class="amenu-n">WhatsApp</div></div>
         <div class="amenu-c" onclick="R.ir('stats')"><span class="amenu-i">📊</span><div class="amenu-n">Estatísticas</div></div>
         <div class="amenu-c" onclick="R.ir('pagamentos')"><span class="amenu-i">💳</span><div class="amenu-n">Pagamentos</div></div>
-        <div class="amenu-c" style="border-color:var(--gold)" onclick="R.ir('lotes')"><span class="amenu-i">🎟️</span><div class="amenu-n">Cotas ao Vivo</div></div>
+        <div class="amenu-c" style="border-color:var(--gold)" onclick="R.ir('lotes')"><span class="amenu-i">🧾</span><div class="amenu-n">Cotas ao Vivo</div></div>
         <div class="amenu-c" onclick="R.ir('boloes')"><span class="amenu-i">🎲</span><div class="amenu-n">Bolões</div></div>
         <div class="amenu-c" onclick="R.ir('usuarios')"><span class="amenu-i">👥</span><div class="amenu-n">Usuários <span style="font-size:.65rem;background:var(--primary);color:#000;border-radius:10px;padding:1px 5px;margin-left:2px">${qtUsr}</span></div></div>
         <div class="amenu-c" onclick="R.ir('premiacao')"><span class="amenu-i">🏆</span><div class="amenu-n">Premiação</div></div>
@@ -2617,7 +2628,7 @@ const WPP = {
     const cotas=parseInt($('wcotas')?.value)||0;
     const pfmt=premio>0?fmtPremio(premio):'—';
     const frase=WPP._getFrase();
-    WPP._msg=`🎰 *${lt.nome}* — Bolão Especial! 🍀\n\n💰 Prêmio estimado: *${pfmt}*\n📅 Sorteio: *${dtFmt}*\n${cotas?`🎟️ Cotas disponíveis: *${cotas}*\n`:''}\n✅ ${frase}\n📲 Confirme respondendo essa mensagem.\n\n_Jogue com responsabilidade. Sorteios são aleatórios e auditados pela Caixa._\n\n🍀 Lotérica Taguacenter — Seu parceiro de bolões`;
+    WPP._msg=`🎰 *${lt.nome}* — Bolão Especial! 🍀\n\n💰 Prêmio estimado: *${pfmt}*\n📅 Sorteio: *${dtFmt}*\n${cotas?`🧾 Cotas disponíveis: *${cotas}*\n`:''}\n✅ ${frase}\n📲 Confirme respondendo essa mensagem.\n\n_Jogue com responsabilidade. Sorteios são aleatórios e auditados pela Caixa._\n\n🍀 Lotérica Taguacenter — Seu parceiro de bolões`;
     const p=$('wprev'); if(p) p.textContent=WPP._msg;
   },
   copy() {
@@ -3117,8 +3128,8 @@ const COTAS = {
     const ativos = lotes.filter(l => this._ativo(l));
     const outros = lotes.filter(l => !this._ativo(l));
     $('view-lotes').innerHTML =
-      '<button class="btn btn-p btn-f mb12" onclick="COTAS.modalNovo()">🎟️ Novo lote relâmpago</button>' +
-      (lotes.length ? '' : '<div class="empty"><div style="font-size:2.2rem">🎟️</div><p>Nenhum lote criado ainda.</p><p class="txs muted">Crie um lote de cotas com contador regressivo e divulgue nos grupos num toque.</p></div>') +
+      '<button class="btn btn-p btn-f mb12" onclick="COTAS.modalNovo()">🧾 Novo lote relâmpago</button>' +
+      (lotes.length ? '' : '<div class="empty"><div style="font-size:2.2rem">🧾</div><p>Nenhum lote criado ainda.</p><p class="txs muted">Crie um lote de cotas com contador regressivo e divulgue nos grupos num toque.</p></div>') +
       (ativos.length ? '<div class="sectt mb8">🔴 Ao vivo</div>' : '') +
       ativos.map(l => this._cardAdmin(l)).join('') +
       (outros.length ? '<div class="sectt mt12 mb8">Encerrados / esgotados</div>' : '') +
@@ -3178,7 +3189,7 @@ const COTAS = {
       ? grupos.map(g => '<label class="grp-check"><input type="checkbox" class="lt-grp" value="' + g.id + '" ' + (g.jid?'checked':'') + '><span>' + this._esc(g.nome) + ' ' + (g.jid ? '<span class="badge txs" style="background:var(--primary);color:#000">Bot ✓</span>' : '<span class="txs muted">(sem bot — não recebe automático)</span>') + '</span></label>').join('')
       : '<div class="txs muted">Nenhum grupo cadastrado.</div>';
     MODAL.open(
-      '<div class="sectt mb8">🎟️ Novo lote relâmpago</div>' +
+      '<div class="sectt mb8">🧾 Novo lote relâmpago</div>' +
       optBolao +
       '<div class="fg mb8"><label>Nome do bolão</label><input id="lt-nome" placeholder="Ex: Mega Acumulada 300 mi"></div>' +
       '<div class="fxb" style="gap:8px">' +
@@ -3235,7 +3246,7 @@ const COTAS = {
   _renderCliente() {
     const lotes = (S._lotesCache||[]).filter(l => this._ativo(l));
     const el = $('view-cotas'); if (!el) return;
-    if (!lotes.length) { el.innerHTML = '<div class="empty" style="margin-top:40px"><div style="font-size:2.6rem">🎟️</div><p>Nenhuma cota aberta agora.</p><p class="txs muted">Quando o lotérico abrir um bolão relâmpago, ele aparece aqui e no grupo do WhatsApp. Fique de olho!</p></div>'; return; }
+    if (!lotes.length) { el.innerHTML = '<div class="empty" style="margin-top:40px"><div style="font-size:2.6rem">🧾</div><p>Nenhuma cota aberta agora.</p><p class="txs muted">Quando o lotérico abrir um bolão relâmpago, ele aparece aqui e no grupo do WhatsApp. Fique de olho!</p></div>'; return; }
     el.innerHTML = lotes.map(l => this._cardCliente(l)).join('');
   },
   _cardCliente(l) {
@@ -3271,7 +3282,7 @@ const COTAS = {
   },
   reservar(loteId, cotaId) {
     MODAL.open(
-      '<div class="sectt mb8">🎟️ Reservar cota</div>' +
+      '<div class="sectt mb8">🧾 Reservar cota</div>' +
       '<div class="fg mb8"><label>Seu nome</label><input id="rsv-nome" value="' + this._esc(S.user?.nome||'') + '" placeholder="Seu nome"></div>' +
       '<div class="fg mb8"><label>WhatsApp (opcional)</label><input id="rsv-fone" placeholder="(61) 9...."></div>' +
       '<button class="btn btn-p btn-f" onclick="COTAS._confirmarReserva(\'' + loteId + '\',\'' + cotaId + '\')">Reservar minha cota</button>' +
