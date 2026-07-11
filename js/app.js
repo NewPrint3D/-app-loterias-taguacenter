@@ -1543,41 +1543,73 @@ const R = {
     });
 
     const todos = Object.values(mapa).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
-    const soBolao = todos.filter(t=>!t.noApp);
+    // Banco de clientes de verdade = quem entrou no app com nome+telefone (ou foi liberado pelo
+    // admin) — é o único grupo com telefone confiável o suficiente pra divulgação futura. O resto
+    // (só bolão/só grupo) fica separado, mais abaixo.
+    const clientes = todos.filter(t=>t.noApp);
+    const soContato = todos.filter(t=>!t.noApp);
+    const comFone = clientes.filter(t=>t.fone).length;
 
     $('view-usuarios').innerHTML=`
       <div class="fxb mb12">
         <div class="sectt">Apostadores (${todos.length})</div>
         <button class="btn btn-p btn-sm" onclick="R._mNovoUser()">+ Adicionar</button>
       </div>
-      ${soBolao.length ? `<div class="ia-aviso mb12">
-        ⚠️ <strong>${soBolao.length}</strong> apostador${soBolao.length>1?'es':''} (em bolões ou cadastrado${soBolao.length>1?'s':''} no grupo) sem acesso ao app.
-        <br><button class="btn btn-p btn-sm mt8" onclick="R._registrarTodos()">✅ Registrar todos no app</button>
-      </div>` : ''}
-      <div class="card">
-        ${!todos.length
-          ? '<div class="empty"><div class="ei">👥</div><p>Nenhum apostador encontrado.</p></div>'
-          : todos.map(t=>`
+
+      <div class="fxb mb8">
+        <div class="sectt">📱 Banco de clientes (${clientes.length})</div>
+        ${comFone ? `<button class="btn btn-o btn-sm" onclick="R._copiarTelefonesClientes()">📋 Copiar telefones</button>` : ''}
+      </div>
+      <div class="txs muted mb8">Quem já entrou no app com nome + telefone — base confiável pra divulgação futura (WhatsApp, promoções, sorteios).</div>
+      <div class="card mb16">
+        ${!clientes.length
+          ? '<div class="empty"><div class="ei">📱</div><p>Ninguém entrou no app ainda com nome + telefone.</p></div>'
+          : clientes.map(t=>`
           <div class="user-card">
-            <div class="user-avatar" style="background:${t.noApp?'var(--primary)':'var(--border);color:var(--text)'}">${t.nome[0].toUpperCase()}</div>
+            <div class="user-avatar" style="background:var(--primary)">${t.nome[0].toUpperCase()}</div>
             <div class="user-info">
               <div class="user-nome">${t.nome}
-                ${t.noApp
-                  ? `<span class="badge txs" style="background:${t.ativo?'var(--primary)':'var(--red)'};color:#fff;margin-left:6px">${t.ativo?'App ✓':'Inativo'}</span>`
-                  : `<span class="badge txs" style="background:var(--border);color:var(--muted);margin-left:6px">${t.emBolao?'Só bolão':'Só grupo'}</span>`}
+                <span class="badge txs" style="background:${t.ativo?'var(--primary)':'var(--red)'};color:#fff;margin-left:6px">${t.ativo?'Ativo':'Inativo'}</span>
               </div>
-              <div class="user-meta txs muted">
-                ${t.fone?`📱 ${t.fone}`:''}${t.grupos.length?` · ${t.grupos.join(', ')}`:''}</div>
+              <div class="user-meta txs muted">${t.fone?`📱 ${t.fone}`:'sem telefone'}${t.grupos.length?` · ${t.grupos.join(', ')}`:''}</div>
             </div>
             <div class="user-acts">
-              ${t.noApp
-                ? `<button class="btn btn-o btn-sm" onclick="R._toggleUser('${t._id}')">${t.ativo?'Desativar':'Ativar'}</button>
-                   <button class="btn btn-d btn-sm" onclick="R._delUser('${t._id}')">✕</button>`
-                : `<button class="btn btn-p btn-sm" onclick="R._registrarNaApp('${t.nome.replace(/'/g,"\\'").replace(/"/g,'\\"')}','${t.fone||''}')">Dar acesso</button>`}
+              <button class="btn btn-o btn-sm" onclick="R._toggleUser('${t._id}')">${t.ativo?'Desativar':'Ativar'}</button>
+              <button class="btn btn-d btn-sm" onclick="R._delUser('${t._id}')">✕</button>
             </div>
           </div>`).join('')}
       </div>
-      <div class="ia-aviso mt12">💡 <strong>App ✓</strong> = pode entrar no app digitando o nome. <strong>Só bolão</strong> = participa de bolões mas ainda não tem acesso. Clique "Dar acesso" para liberar.</div>`;
+
+      ${soContato.length ? `
+      <div class="fxb mb8">
+        <div class="sectt">Só em bolões/grupos (${soContato.length})</div>
+      </div>
+      <div class="ia-aviso mb12">
+        ⚠️ Ainda sem acesso ao app — não entraram com nome + telefone, então não fazem parte do banco de clientes.
+        <br><button class="btn btn-p btn-sm mt8" onclick="R._registrarTodos()">✅ Registrar todos no app</button>
+      </div>
+      <div class="card">
+        ${soContato.map(t=>`
+          <div class="user-card">
+            <div class="user-avatar" style="background:var(--border);color:var(--text)">${t.nome[0].toUpperCase()}</div>
+            <div class="user-info">
+              <div class="user-nome">${t.nome}
+                <span class="badge txs" style="background:var(--border);color:var(--muted);margin-left:6px">${t.emBolao?'Só bolão':'Só grupo'}</span>
+              </div>
+              <div class="user-meta txs muted">${t.fone?`📱 ${t.fone}`:''}${t.grupos.length?` · ${t.grupos.join(', ')}`:''}</div>
+            </div>
+            <div class="user-acts">
+              <button class="btn btn-p btn-sm" onclick="R._registrarNaApp('${t.nome.replace(/'/g,"\\'").replace(/"/g,'\\"')}','${t.fone||''}')">Dar acesso</button>
+            </div>
+          </div>`).join('')}
+      </div>` : ''}`;
+  },
+  _copiarTelefonesClientes() {
+    const fones = (DB.usuarios.list()||[]).filter(u=>u.fone).map(u=>u.fone);
+    if (!fones.length) { TOAST.show('Nenhum telefone pra copiar.', 'err'); return; }
+    navigator.clipboard.writeText(fones.join(', '))
+      .then(()=>TOAST.show(`📋 ${fones.length} telefone${fones.length>1?'s':''} copiado${fones.length>1?'s':''}!`, 'ok'))
+      .catch(()=>TOAST.show('Não deu pra copiar — copie manualmente.', 'err'));
   },
 
   _mNovoUser() {
