@@ -4,7 +4,8 @@ App de gestão de bolões para lotérica física (Taguacenter, Brasília).
 Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreSQL.
 Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
-**Estado em: 11/07/2026** (Etapa 3 — Bolão Anual/Parcelado — implementada, aguardando deploy/validação em produção)
+**Estado em: 11/07/2026** (Etapa 3 — Bolão Anual/Parcelado — em produção, validada; inclui importação
+em lote do grupo e marcação de meses pagos em lote)
 
 ## Como rodar localmente
 
@@ -353,6 +354,35 @@ sempre **mês calendário** (1=janeiro...12=dezembro), independente de quando o 
   servidor. Corrigido incluindo `status`/`enviado_em` explícitos no payload, mesmo padrão já usado
   em `R._envComp` (Cotas ao Vivo).
 
+### Importar participantes do grupo + marcar meses pagos em lote (11/07/2026)
+
+Cadastro em massa pra não precisar registrar apostador por apostador quando o bolão já reaproveita
+a galera de um grupo WhatsApp existente, e pra registrar de uma vez os meses que um bolão **já em
+andamento antes de entrar no app** (ex: Mega da Virada que já estava sendo cobrada manualmente)
+tinha pago antes de virar cadastro digital.
+
+- **"📱 Importar do grupo"** (botão na tela `_anualDet`, `R._mImportarGrupoAnual`): escolhe um grupo
+  já cadastrado (`DB.grupos.list()`), lista o roster permanente (`DB.grupoMembros.list(grupoId)`,
+  filtrando "Sem nome"), com checkbox pra desmarcar quem não participa deste bolão específico — quem
+  já foi importado antes (telefone já bate com um participante existente) aparece desabilitado
+  ("já participa"), evitando duplicar.
+- **"📅 Marcar meses pagos"** (botão por linha na planilha, `R._mMarcarLoteAnual`): abre checkboxes
+  de todos os meses do bolão, marca de uma vez como `confirmado` (sem passar por `pendente`, já que
+  é o próprio admin registrando um histórico, não um cliente enviando comprovante). Nova rota
+  dedicada `POST /api/bolao-parcelado-pagamentos/lote` (protegida, admin) — insere/atualiza vários
+  meses numa chamada só (em vez de POST+PUT por mês) e aplica a quitação automática se um dos meses
+  bater com `mes_quitacao_previsto`.
+- **Cuidado de segurança encontrado durante o teste**: ao validar essas duas features em produção,
+  o classificador de auto mode bloqueou corretamente uma tentativa de testar "marcar meses pagos"
+  anexando pagamentos fabricados a participantes **reais** (importados de um grupo de verdade) num
+  bolão de teste descartável — criaria histórico financeiro falso vinculado à identidade de pessoas
+  reais, mesmo que fosse apagado depois. Refeito com um participante 100% sintético (nome/telefone
+  fictício) pra validar a rota sem esse risco. **Lição**: nunca fabricar dados financeiros/histórico
+  vinculados a pessoas reais em teste, mesmo que descartável — usar sempre dado sintético.
+- Existe um bolão real em produção, **"Mega da Virada 2026"**, criado pelo usuário direto no app
+  (não fui eu) — ainda sem participantes na última checagem (11/07/2026). Essas duas features
+  facilitam ele popular esse bolão sem digitar cada apostador manualmente.
+
 ## Funcionalidades implementadas
 
 - Splash screen + login (bcrypt + JWT 24h, senha em texto puro); cliente entra com **nome completo +
@@ -366,7 +396,8 @@ sempre **mês calendário** (1=janeiro...12=dezembro), independente de quando o 
   libera sozinha se estourar o prazo sem comprovante
 - Premiação — admin cadastra prêmio por nome+telefone, apostador confirma com fogos de artifício
 - **Bolão Anual/Parcelado** — sistema genérico de arrecadação mensal, planilha completa (participante
-  × mês) com gráficos pro admin, upload de comprovante com mês livre + declaração de quitação pro cliente
+  × mês) com gráficos pro admin, upload de comprovante com mês livre + declaração de quitação pro
+  cliente, importação em lote de participantes do grupo e marcação de meses pagos em lote
 - **Grupos de Bolões** (navegação do admin) — acompanhamento de pagamento por grupo
 - Bolões — criar, excluir (admin/dev), detalhes (Resultado / IA / Membros)
 - Membros — pagamento, comprovante, importação por colagem ou via bot do WhatsApp
@@ -429,14 +460,22 @@ produção com lote de teste real.
 quando clicados via automação de browser — usar `DB.x.del(id)`/`_api.del(...)` direto no console
 pra apagar dados de teste, nunca clicar no botão que abre o `confirm()`.
 
-**Etapa 3 — Bolão Anual/Parcelado** (11/07/2026): 4ª e última funcionalidade grande combinada no
-início da sessão — ver seção própria "Bolão Anual/Parcelado" acima para detalhes completos (schema,
-rotas, telas admin/cliente, quitação automática). Testada localmente ponta a ponta (criar bolão,
-adicionar participante, enviar comprovante de mês errado → aviso, mês certo → pendente, admin
-confirma → pago, declarar quitação → confirmar o mês previsto → quitado automático, gráficos)
-antes do commit — como o backend de produção ainda não tinha as rotas novas na hora do teste local,
-os testes iniciais rodaram só em cache local (POST retornando 404 silencioso); a validação de
-verdade em produção (com dados reais de teste + limpeza) acontece depois do deploy.
+**Etapa 3 — Bolão Anual/Parcelado** (11/07/2026, commit `c41bfa2`): 4ª e última funcionalidade grande
+combinada no início da sessão — ver seção própria "Bolão Anual/Parcelado" acima para detalhes
+completos (schema, rotas, telas admin/cliente, quitação automática). Testada localmente ponta a
+ponta (criar bolão, adicionar participante, enviar comprovante de mês errado → aviso, mês certo →
+pendente, admin confirma → pago, declarar quitação → confirmar o mês previsto → quitado automático,
+gráficos) antes do commit — como o backend de produção ainda não tinha as rotas novas na hora do
+teste local, os testes iniciais rodaram só em cache local (POST retornando 404 silencioso); depois
+do deploy, validado de novo ponta a ponta em produção real (dados de teste criados e apagados).
+
+**Follow-up da Etapa 3 — importar do grupo + marcar meses pagos em lote** (11/07/2026, commit
+`87aa676`): usuário perguntou como cadastrar de forma automatizada um bolão Mega da Virada real que
+já estava em andamento (não queria ficar adicionando participante um por um) — ver seção própria
+acima. Validado em produção com um bolão de teste descartável; achado de segurança relevante
+durante o teste (ver seção "Cuidado de segurança encontrado durante o teste" acima) — o classificador
+bloqueou uma tentativa de anexar pagamento fabricado a participante real, corrigido testando com
+dado sintético.
 
 ## Dados de teste
 
