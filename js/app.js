@@ -3909,6 +3909,7 @@ const DEV = {
 const TEMA = {
   _key: 'ltr_tema',
   _partsAtivas: [],
+  _fogosTimer: null,
 
   atual() { return localStorage.getItem(this._key) || 'padrao'; },
 
@@ -3917,8 +3918,10 @@ const TEMA = {
     document.body.setAttribute('data-tema', t.id);
     localStorage.setItem(this._key, t.id);
     this._pararParticulas();
+    this._pararFogos();
     this._atualizarFaixa(t);
     if (t.decos.length) this._iniciarParticulas(t);
+    if (t.fogos) this._iniciarFogos(t.fogos, t.cores);
     this._atualizarMetaColor(t.cores.bg2);
     if (S.user?.role) R.ir('admin');
   },
@@ -3929,6 +3932,7 @@ const TEMA = {
     this._atualizarFaixa(t);
     this._atualizarMetaColor(t.cores.bg2);
     if (t.decos.length) this._iniciarParticulas(t);
+    if (t.fogos) this._iniciarFogos(t.fogos, t.cores);
   },
 
   _atualizarMetaColor(cor) {
@@ -3953,6 +3957,19 @@ const TEMA = {
     el.style.color       = t.cores.primary;
     el.hidden = false;
     document.body.classList.add('tem-faixa');
+    this._posicionarBarbante();
+  },
+
+  // O barbante (São João) precisa ficar logo abaixo do header+faixa-tema — como a altura desses
+  // dois varia (com/sem botão de voltar, texto quebrando em telas estreitas), calcula na hora em
+  // vez de usar um valor fixo em px (senão sobrepõe a faixa, como aconteceu na primeira versão).
+  _posicionarBarbante() {
+    const bb = document.getElementById('deco-barbante');
+    if (!bb) return;
+    const faixa = document.getElementById('faixa-tema');
+    const header = document.getElementById('header');
+    const ref = (faixa && !faixa.hidden) ? faixa : header;
+    if (ref) bb.style.top = ref.getBoundingClientRect().bottom + 'px';
   },
 
   _iniciarParticulas(t) {
@@ -3964,7 +3981,7 @@ const TEMA = {
     // neve/pétalas usam animação de queda; outros sobem
     const usaQueda  = ['natal','maes','pascoa'].includes(id);
     const anims     = usaQueda ? ['anim-d','anim-d','anim-c'] : ['anim-a','anim-a','anim-b','anim-c'];
-    const qt        = 35;
+    const qt        = 14; // reduzido de 35 — tema mais leve, menos "papagaiado"
     const tamanhos  = ['.9rem','1.1rem','1.4rem','1.7rem','2rem'];
     const duracoes  = usaQueda
       ? [10,12,14,16,18,20]
@@ -3988,6 +4005,65 @@ const TEMA = {
     const zona = document.getElementById('deco-tema');
     if (zona) zona.innerHTML = '';
     this._partsAtivas = [];
+  },
+
+  // Fogos de artifício discretos: sobe um ponto brilhante, estoura em partículas radiais e, às
+  // vezes, revela um texto ("Feliz 2027"/"Feliz Natal") — usado por Mega da Virada e Natal.
+  _iniciarFogos(texto, cores) {
+    this._pararFogos();
+    const paleta = [cores.primary, cores.gold, '#ffffff'];
+    const disparar = () => {
+      const zona = document.getElementById('deco-fogos');
+      if (!zona) return;
+      const x = Math.random() * 70 + 15; // 15%-85% da largura
+      const altoPx = Math.random() * 120 + 140;
+      const cor = paleta[Math.floor(Math.random() * paleta.length)];
+
+      const subida = document.createElement('span');
+      subida.className = 'fogo-subida';
+      subida.style.left = x + '%';
+      subida.style.setProperty('--c', cor);
+      subida.style.setProperty('--alt', '-' + altoPx + 'px');
+      zona.appendChild(subida);
+
+      setTimeout(() => {
+        subida.remove();
+        const zona2 = document.getElementById('deco-fogos');
+        if (!zona2) return;
+        const burst = document.createElement('span');
+        burst.className = 'fogo-burst';
+        burst.style.left = x + '%';
+        burst.style.bottom = `calc(8% + ${altoPx}px)`;
+        const n = 10;
+        for (let i = 0; i < n; i++) {
+          const p = document.createElement('span');
+          p.className = 'fp';
+          p.style.setProperty('--c', cor);
+          p.style.setProperty('--a', (i * (360 / n)) + 'deg');
+          burst.appendChild(p);
+        }
+        zona2.appendChild(burst);
+        if (Math.random() < .35) {
+          const txt = document.createElement('span');
+          txt.className = 'fogo-texto';
+          txt.textContent = texto;
+          txt.style.left = x + '%';
+          txt.style.bottom = `calc(8% + ${altoPx}px)`;
+          txt.style.setProperty('--c', cor);
+          zona2.appendChild(txt);
+          setTimeout(() => txt.remove(), 2500);
+        }
+        setTimeout(() => burst.remove(), 1100);
+      }, 1100);
+    };
+    disparar();
+    this._fogosTimer = setInterval(disparar, 5500 + Math.random() * 3000);
+  },
+  _pararFogos() {
+    if (this._fogosTimer) clearInterval(this._fogosTimer);
+    this._fogosTimer = null;
+    const zona = document.getElementById('deco-fogos');
+    if (zona) zona.innerHTML = '';
   },
 
   renderSeletor() {
@@ -4019,6 +4095,7 @@ const TEMA = {
 // =============================================
 document.addEventListener('DOMContentLoaded', () => {
   TEMA.carregar();
+  window.addEventListener('resize', () => TEMA._posicionarBarbante());
   setTimeout(()=>{
     $('splash').classList.add('hide');
     setTimeout(()=>{

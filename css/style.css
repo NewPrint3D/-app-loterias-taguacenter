@@ -799,44 +799,115 @@ body[data-tema="independencia"] #faixa-tema::before {
 
 .deco-p { position:absolute; bottom:-80px; user-select:none; opacity:0; }
 
-/* Flutuação simples */
+/* Flutuação simples — opacidade reduzida (tema mais leve, menos "papagaiado") */
 .deco-p.anim-a { animation: decoA linear infinite; }
 @keyframes decoA {
   0%   { transform: translateY(0) rotate(0deg) scale(.7);   opacity:0; }
-  7%   { opacity:.8; }
-  85%  { opacity:.4; }
+  7%   { opacity:.4; }
+  85%  { opacity:.2; }
   100% { transform: translateY(-115vh) rotate(480deg) scale(1.2); opacity:0; }
 }
 /* Zigzag */
 .deco-p.anim-b { animation: decoB ease-in-out infinite; }
 @keyframes decoB {
   0%   { transform: translate(0,0)     rotate(0deg);   opacity:0; }
-  6%   { opacity:.75; }
+  6%   { opacity:.38; }
   25%  { transform: translate(25px,-30vh)  rotate(90deg); }
   50%  { transform: translate(-20px,-60vh) rotate(200deg); }
   75%  { transform: translate(20px,-85vh)  rotate(320deg); }
-  90%  { opacity:.3; }
+  90%  { opacity:.15; }
   100% { transform: translate(-10px,-115vh) rotate(420deg); opacity:0; }
 }
 /* Espiral */
 .deco-p.anim-c { animation: decoC linear infinite; }
 @keyframes decoC {
   0%   { transform: translateY(0) translateX(0)   scale(.6) rotate(0deg);   opacity:0; }
-  8%   { opacity:.9; }
+  8%   { opacity:.45; }
   30%  { transform: translateY(-35vh) translateX(20px)  scale(.9) rotate(120deg); }
   60%  { transform: translateY(-65vh) translateX(-20px) scale(1.1) rotate(260deg); }
-  90%  { opacity:.3; }
+  90%  { opacity:.15; }
   100% { transform: translateY(-115vh) translateX(10px) scale(.7) rotate(400deg); opacity:0; }
 }
 /* Queda lenta (neve/pétalas) */
 .deco-p.anim-d { animation: decoD ease-in-out infinite; }
 @keyframes decoD {
   0%   { transform: translateY(-10vh) translateX(0) rotate(0deg) scale(1.1);   opacity:0; }
-  5%   { opacity:.7; }
+  5%   { opacity:.35; }
   50%  { transform: translateY(50vh) translateX(30px)  rotate(180deg) scale(.9); }
-  90%  { opacity:.4; }
+  90%  { opacity:.2; }
   100% { transform: translateY(115vh) translateX(-15px) rotate(360deg) scale(.7); opacity:0; }
 }
+
+/* ── Fitinhas ao vento (tema Independência) ── */
+#deco-fitas { position:fixed; inset:0; pointer-events:none; z-index:1; overflow:hidden; display:none; }
+body[data-tema="independencia"] #deco-fitas { display:block; }
+.fita {
+  position:absolute; top:0; width:7px; height:72vh; border-radius:50%;
+  opacity:.3; transform-origin:top center; animation: fitaVento 4.5s ease-in-out infinite;
+}
+.fita.fita-verde  { left:14%; background:linear-gradient(180deg,#00d45a 0%,#00d45a 60%,transparent 100%); animation-delay:0s; }
+.fita.fita-amarela{ right:14%; background:linear-gradient(180deg,#ffd700 0%,#ffd700 60%,transparent 100%); animation-delay:1.1s; }
+@keyframes fitaVento {
+  0%   { transform: rotate(-9deg) translateX(0); }
+  25%  { transform: rotate(11deg) translateX(10px); }
+  50%  { transform: rotate(-6deg) translateX(-8px); }
+  75%  { transform: rotate(9deg) translateX(8px); }
+  100% { transform: rotate(-9deg) translateX(0); }
+}
+
+/* ── Barbante de bandeirinhas + balões (tema São João) ── */
+#deco-barbante { position:fixed; left:0; right:0; height:40px; pointer-events:none; z-index:1; display:none; overflow:visible; }
+body[data-tema="sao_joao"] #deco-barbante { display:block; }
+#deco-barbante::before {
+  content:''; position:absolute; top:3px; left:4%; right:4%; height:1px;
+  background: repeating-linear-gradient(90deg, rgba(255,214,120,.5) 0 6px, transparent 6px 10px);
+}
+.bd-bandeira {
+  position:absolute; top:3px; width:0; height:0; opacity:.55;
+  border-left:5px solid transparent; border-right:5px solid transparent; border-top:8px solid var(--c);
+}
+.bd-balao { position:absolute; top:3px; font-size:.85rem; opacity:.5; transform-origin:top center; animation: baloVento 4.5s ease-in-out infinite; }
+.bd-balao::before { content:''; position:absolute; left:50%; top:-11px; width:1px; height:11px; background:rgba(255,255,255,.3); }
+@keyframes baloVento { 0%,100% { transform:translateY(0) rotate(-3deg); } 50% { transform:translateY(3px) rotate(3deg); } }
+
+/* ── Fogos de artifício (temas Mega da Virada / Natal) ── */
+#deco-fogos { position:fixed; inset:0; pointer-events:none; z-index:1; overflow:hidden; }
+.fogo-subida {
+  position:absolute; bottom:8%; width:3px; height:3px; border-radius:50%; background:var(--c);
+  box-shadow:0 0 6px 1px var(--c); animation: fogoSobe 1.1s ease-out forwards;
+}
+@keyframes fogoSobe { 0% { opacity:.9; transform:translateY(0); } 100% { opacity:0; transform:translateY(var(--alt)); } }
+.fogo-burst { position:absolute; width:0; height:0; }
+.fogo-burst .fp {
+  position:absolute; top:0; left:0; width:6px; height:6px; border-radius:50%; background:var(--c);
+  opacity:0; transform:rotate(var(--a)) translateY(0); animation: fogos-estourar 1s ease-out forwards;
+}
+.fogo-texto {
+  position:absolute; transform:translate(-50%,-50%); font-weight:800; font-size:1.05rem; white-space:nowrap;
+  color:var(--c); text-shadow:0 0 10px var(--c), 0 0 4px rgba(0,0,0,.6); opacity:0;
+  animation: fogoTexto 2.4s ease-out forwards;
+}
+@keyframes fogoTexto {
+  0%   { opacity:0; transform:translate(-50%,-40%) scale(.7); }
+  18%  { opacity:.9; transform:translate(-50%,-50%) scale(1); }
+  75%  { opacity:.8; }
+  100% { opacity:0; transform:translate(-50%,-58%) scale(1.05); }
+}
+
+/* ── Árvore de Natal fixa com luzes piscando ── */
+#deco-arvore-natal {
+  display:none; position:fixed; right:10px; bottom:78px; font-size:1.9rem; line-height:1; z-index:1;
+  pointer-events:none; opacity:.55; filter: drop-shadow(0 2px 4px rgba(0,0,0,.4));
+}
+body[data-tema="natal"] #deco-arvore-natal { display:block; }
+.dan-luz {
+  position:absolute; left:var(--x); top:var(--y); width:5px; height:5px; border-radius:50%;
+  background:var(--c); box-shadow:0 0 4px 1px var(--c); animation: danPiscar 1.6s ease-in-out infinite;
+}
+.dan-luz:nth-child(2) { animation-delay:.3s; }
+.dan-luz:nth-child(3) { animation-delay:.6s; }
+.dan-luz:nth-child(4) { animation-delay:.9s; }
+@keyframes danPiscar { 0%,100% { opacity:.25; } 50% { opacity:1; } }
 
 /* ── Seletor de tema (painel admin) ── */
 .tema-grid {
