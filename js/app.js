@@ -414,7 +414,7 @@ const AUTH = {
 
     DB.ctrl.log('Login: ' + (S.user.nome||S.user.login));
     ZE.start();
-    R.irTab('home');
+    R.ir('home');
     R._verificarPremios();
     R._verificarPremiacaoCliente();
     RELAY.verificarPendentes();
@@ -651,19 +651,12 @@ const R = {
     // Atualiza botão ativo no nav correto
     const nav = AUTH.isAdmin() ? $('nav-admin') : $('nav-user');
     nav?.querySelectorAll('.nb').forEach(b=>b.classList.toggle('on',b.dataset.v===tela));
-    // Seta de voltar aparece sempre que há pra onde voltar de verdade (pilha não vazia) — não
-    // depende mais de uma lista fixa de telas "principais", então funciona em qualquer tela
-    // alcançada por um card/link (ex: Bolões Ativos → Cotas), não só pelos ícones da barra.
-    $('btn-back').hidden = S.stack.length===0;
+    // Seta de voltar aparece em qualquer tela que não seja a Início — inclusive nas alcançadas
+    // pelos ícones das barras (ex: Cotas, Grupos), pra sempre dar um jeito de voltar sem precisar
+    // tocar em ícone nenhum.
+    $('btn-back').hidden = (tela === 'home');
     const fn=R['_'+tela];
     if(fn) fn(params);
-  },
-  // Navegação pelos ícones da barra (superior/inferior) — reinicia a pilha, virando um novo
-  // "início" de navegação (por isso nunca mostra seta de voltar). R.ir() normal (usado por
-  // cards/links dentro das telas) empilha e permite voltar.
-  irTab(tela, params={}) {
-    S.stack = [];
-    R.ir(tela, params, {semPush:true});
   },
   voltar() { const t=S.stack.pop()||'home'; R.ir(t, {}, {semPush:true}); },
 
