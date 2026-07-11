@@ -4,7 +4,7 @@ App de gestão de bolões para lotérica física (Taguacenter, Brasília).
 Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreSQL.
 Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
-**Estado em: 09/07/2026**
+**Estado em: 11/07/2026**
 
 ## Como rodar localmente
 
@@ -29,7 +29,7 @@ css/style.css       — estilos e tema escuro
 js/config.js        — configurações centrais (APP, LOTERIAS, CREDS, MOCK, FRASES_ZE, TEMAS)
 js/app.js           — toda a lógica: estado, auth, DB, router, views, WhatsApp, BOT, Dev
 img/logo.png        — logo da Lotérica Taguacenter
-img/ze-loteca.png   — mascote Zé Loteca
+img/ze-loteca.png   — mascote "Palpiteiro" (arquivo/nome interno continua ze-loteca, só o nome exibido mudou)
 server/server.js    — API REST (Express + Neon PostgreSQL + Baileys WhatsApp Bot)
 server/package.json — dependências do backend (express, pg, cors, baileys, qrcode, pino)
 server/schema.sql   — schema das tabelas Neon (referência)
@@ -39,17 +39,22 @@ server/schema.sql   — schema das tabelas Neon (referência)
 
 | Perfil   | Nome no login | Senha              | Acesso |
 |----------|---------------|--------------------|--------|
-| Admin    | `admin`       | `admin123`         | Nav completa: Início, Grupos, Result., Admin, Conta |
+| Admin    | `admin`       | `admin123`         | Nav completa: Início, Grupos, Result., Config., Conta |
 | Dev      | `dev`         | `dev@zeloteca2024` | Igual admin + menu Controle Dev |
-| Cliente  | qualquer nome | (sem senha)        | Digita nome + grupo do bolão → Nav: Início, Zé Loteca, Conta |
+| Cliente  | nome completo + telefone (DDD) | (sem senha) | Nav: Início, Cotas, Palpiteiro, Conta |
 
 > Dev também pode ser acessado com 7 taps rápidos no logo do header (modo oculto) — mais confiável que o formulário em produção (cache).
+
+> **Login do cliente mudou em 10/07/2026** — não pede mais "grupo", pede nome completo + telefone,
+> memorizado por aparelho (`localStorage`). Aba "Admin" da barra inferior virou **"Config."**;
+> mascote "Zé Loteca" virou **"Palpiteiro"** (ver seção "Sessão 10-11/07/2026"). Campo de senha do
+> admin/dev deixou de ser mascarado (`type="text"`) — usuário pediu pra ver o que digita.
 
 > **Segurança (desde 04/07/2026):** as senhas acima são só as senhas de demonstração/dev. No
 > servidor elas são validadas com **bcrypt** (nunca em texto puro) contra hashes que podem ser
 > sobrescritos por env vars no Render (`ADMIN_SENHA_HASH`, `DEV_SENHA_HASH`). Login bem-sucedido
-> devolve um **token JWT** (1h, renovação deslizante). Nunca colar essas senhas em documentos
-> públicos/apresentações.
+> devolve um **token JWT** (24h, renovação deslizante — aumentado de 1h em 09/07/2026). Nunca colar
+> essas senhas em documentos públicos/apresentações.
 
 ## Loterias suportadas
 
@@ -62,11 +67,16 @@ server/schema.sql   — schema das tabelas Neon (referência)
 | Timemania    | 10      | 80  | R$3,50 | — |
 | Dupla Sena   | 6       | 50  | R$2,50 | — |
 | Dia de Sorte | 7       | 31  | R$2,50 | — |
-| **Loteca**   | 14      | 3   | R$2,00 | 14 jogos de futebol, palpite 1/X/2 (`palpite:true`) |
 | **+Milionária** | 6    | 50  | R$6,00 | 6 dezenas + 2 trevos 1-6 (`trevos:2`) |
 | **Super Sete**  | 7    | 9   | R$2,50 | 7 colunas, dígitos 0-9 (`colunas:7`) |
 
-> As 3 últimas (Loteca, +Milionária, Super Sete) foram adicionadas em **09/07/2026** — detalhes logo abaixo.
+> +Milionária e Super Sete foram adicionadas em **09/07/2026** — detalhes logo abaixo.
+> **Loteca foi removida em 11/07/2026** (confirmado com o cliente) — era baseada em resultado de
+> jogos de futebol (palpite 1/X/2), formato muito diferente das demais (por dezenas numéricas).
+> Removida do catálogo inteiro: `jogosHTML`, `API._buscarCaixaDireto` (fetch direto no navegador
+> contornando bloqueio de IP do Render pra API da Caixa), parsing do resultado esportivo em
+> `API.parse`, e o branch equivalente no backend (`server.js`, fonte `caixa-direto`). A seção
+> "Loteca — busca direto da Caixa" que existia aqui foi removida junto por não ter mais utilidade.
 
 ## Loterias — visual oficial da Caixa + formatos especiais (09/07/2026)
 
@@ -85,24 +95,6 @@ Padronização visual seguindo as cores oficiais das Loterias Caixa e inclusão 
   - **Super Sete** — a API retorna 7 dígitos em `dezenas` → 7 bolinhas (0-9). Vem pela cadeia normal (loteriascaixa-api).
   - **+Milionária** — 6 dezenas + 2 trevos. O backend preserva `listaTrevos` em `paraFormatoCaixaBruto`;
     o front (`API.parse`) mapeia `trevos` e `trevosHTML(r)` exibe os trevos (verdes) após as dezenas.
-  - **Loteca** — 14 jogos de futebol (times + placar), palpite **1/X/2** derivado do placar (casa
-    venceu = 1, empate = X, fora venceu = 2). Helper `jogosHTML(r)`. Ver integração abaixo.
-
-### Loteca — busca direto da Caixa pelo navegador (09/07/2026)
-
-A Loteca **só existe na API oficial da Caixa** (`servicebus2.caixa.gov.br/portaldeloterias/api/loteca`)
-— guidi e loteriascaixa-api não a servem. **O servidor do Render NÃO alcança a API da Caixa** (bloqueio
-de IP), mas a **Caixa permite CORS**, então o próprio navegador do usuário (no Brasil) busca direto:
-
-- `API._buscarCaixaDireto(lt, conc)` em `js/app.js` faz `fetch` direto na Caixa quando a loteria tem
-  `palpite:true` (só a Loteca). Sem proxy, sem passar pelo backend.
-- `API.parse` detecta `listaResultadoEquipeEsportiva` e monta `jogos:[{casa, fora, golCasa, golFora,
-  res}]` + prêmio/próximo concurso (funciona no card e na aba Resultados).
-- Palpite colorido no CSS: `.lj-res-1` verde (casa), `.lj-res-X` laranja (empate), `.lj-res-2` azul (fora).
-- **Limitação:** por vir direto da Caixa pelo navegador, a Loteca só carrega de dispositivos que
-  acessam a Caixa (Brasil). Fora do país o card da Loteca pode ficar vazio (as outras continuam via backend).
-- O backend também aceita Loteca na fonte `caixa-direto`, mas é inócuo (Render não alcança a Caixa) —
-  fica como fallback caso a conectividade mude.
 
 > \* **Coluna "Dias" desatualizada e não exibida na UI desde 05/07/2026** — a Caixa reorganizou o
 > calendário de sorteios em algum momento e esse texto nunca foi corrigido (confirmado
@@ -124,7 +116,7 @@ de IP), mas a **Caixa permite CORS**, então o próprio navegador do usuário (n
 | `API`             | Resultados da Caixa via `GET /api/caixa/...` do nosso backend (3 fontes + cache); proxies só sobrevivem no RELAY |
 | `RELAY`           | Fallback final da conferência automática — busca resultado no navegador do admin e retransmite pro backend |
 | `IA`              | Análise estatística de frequência (quentes/frios) |
-| `ZE`              | Mascote Zé Loteca (frases rotativas + número animado) |
+| `ZE`              | Mascote **Palpiteiro** (ex-"Zé Loteca", renomeado 11/07/2026 — nome interno do módulo/CSS/imagem continua `ze`). Bolinha do número saiu de flutuar sobre a barra inferior e mora agora dentro do card "Bolões Ativos" da Home |
 | `MODAL`           | Abre/fecha modal genérico |
 | `R`               | Router + render de todas as views (navegação principal por **Grupo**, não por loteria) |
 | `WPP`             | WhatsApp Manager + Cadastro Automático via bot |
@@ -136,7 +128,7 @@ de IP), mas a **Caixa permite CORS**, então o próprio navegador do usuário (n
 > O módulo `SEED` (dados demo fictícios) foi **removido** em 05/07/2026 — banco de produção fica
 > vazio até ter dados reais, sem repovoamento automático.
 
-## Banco de dados — Neon PostgreSQL (10 tabelas)
+## Banco de dados — Neon PostgreSQL (13 tabelas)
 
 ```
 grupos        — id, nome, link, membros (nº estimado digitado no cadastro), ativo, jid (JID WhatsApp para o bot)
@@ -150,9 +142,19 @@ membros       — id, bolao_id (FK→boloes CASCADE), nome, fone, cotas, pago
 vendas        — id, bolao_id, loteria, membro, cotas, valor, data
 pagamentos    — id, bolao_id, membro, concurso, img, data, status
 usuarios      — id, nome, ativo, criado, fone
+                (id determinístico 'ap_'+telefone quando vem do login do cliente — ver "Sessão
+                10-11/07/2026"; ids aleatórios quando cadastrado manualmente pelo admin)
 config        — id=1 (única linha), bloqueado, msg, cliente, licenca, validade, logs (JSONB), admin_fone
 wpp_auth      — chave TEXT PK, valor TEXT (sessão Baileys)
 wpp_cadastros — jid TEXT PK, ativo BOOLEAN, mensagem TEXT, iniciado TIMESTAMPTZ (cadastro automático)
+lotes         — id, bolao_id, loteria, nome, concurso, total_cotas, valor_cota, duracao_min (prazo
+                em minutos POR RESERVA — ver seção "Cotas ao Vivo"), inicia_em, expira_em, status
+                (ativo/esgotado/encerrado), grupos (JSONB), aviso50, aviso_esgotado, espera (JSONB), criado
+cotas         — id, lote_id (FK→lotes CASCADE), numero, status (livre/reservada/comprovante/paga),
+                nome, fone, comprovante, reservada_em, pago_em, expira_em (prazo individual da
+                reserva, liberado sozinho por cron se estourar sem comprovante), criado
+premiacoes    — id, nome, fone, valor, mensagem, confirmada BOOLEAN, confirmada_em, criado
+                (casamento apostador→premiação por telefone normalizado, não por nome)
 ```
 
 > IMPORTANTE: PostgreSQL retorna campos NUMERIC como string JS — `carregarDados()` converte com `+valor`.
@@ -184,8 +186,8 @@ Curto (curto=true):   "R$ 7M", "R$ 2,8Bi" (usado em contextos compactos)
 
 ## Autenticação JWT + retry/fila offline (04/07/2026)
 
-- `POST /api/auth/login` valida com bcrypt, devolve `{ok, role, nome, token}` (JWT 1h, renovação
-  deslizante via header `X-Token-Renovado`).
+- `POST /api/auth/login` valida com bcrypt, devolve `{ok, role, nome, token}` (JWT 24h — aumentado
+  de 1h em 09/07/2026 —, renovação deslizante via header `X-Token-Renovado`).
 - Toda rota de escrita exige `Authorization: Bearer <token>`, exceto login, `/api/pagamentos`
   (cliente sem login envia comprovante) e `/api/config/log`.
 - Aprovação de pagamento é rota própria protegida (`PUT /api/pagamentos/:id/status`) — a rota
@@ -260,43 +262,64 @@ permanente (nome + telefone), independente de bolão.
 - Quem ainda não foi identificado aparece na tela como **"Participante N"** (não mais "Sem nome"
   cru), com um badge discreto "aguardando identificação".
 
-## Cotas ao Vivo — Bolão Relâmpago (07/07/2026)
+## Cotas ao Vivo — Bolão Relâmpago (07/07/2026, cronômetro reformulado em 10/07/2026)
 
 Serviço de venda por urgência pedido pelo cliente. O admin abre um **lote** de N cotas de um bolão
-acumulado, com **contador regressivo** (5/10/15/30 min), e o bot divulga nos grupos vinculados. O
-cliente abre o app (nome + grupo, sem login), **escolhe uma cota livre**, reserva com o nome e,
-depois de pagar, **anexa o comprovante** na própria cota. Contador **X/N** ao vivo, aviso de **50%**
-e mensagem de **esgotado** postados automaticamente no grupo pelo bot.
+acumulado, e o bot divulga nos grupos vinculados. O cliente entra no app (nome completo + telefone),
+**escolhe uma cota livre**, reserva com o nome e, depois de pagar, **anexa o comprovante** na
+própria cota. Contador **X/N** ao vivo, aviso de **50%** e mensagem de **esgotado** postados
+automaticamente no grupo pelo bot.
+
+> **Cronômetro é por RESERVA individual, não mais um prazo único do lote** (mudou em 10/07/2026,
+> revisando o pedido original do usuário linha por linha — achou uma inconsistência real com uma
+> decisão de uma sessão anterior). Cada pessoa que reserva uma cota tem `duracao_min` minutos pra
+> pagar; se não pagar, só a cota dela libera sozinha (cron a cada minuto) — a venda continua aberta
+> pros outros, o lote **não** fecha por tempo (só manualmente ou esgotando 100%).
 
 - **Backend (`server/server.js`)** — módulo "COTAS AO VIVO":
-  - Tabelas `lotes` e `cotas` (criadas via `CREATE TABLE IF NOT EXISTS` no startup; ref. em `schema.sql`).
-  - Status da **cota**: `livre` → `reservada` (só nome) → `comprovante` (anexou, conta no X/N) →
-    `paga` (admin confere e confirma). Status do **lote**: `ativo` → `esgotado`/`encerrado`.
-  - Reserva **atômica**: `UPDATE cotas SET status='reservada' ... WHERE status='livre' AND lote ativo`
-    — dois clientes não pegam a mesma cota; se o tempo/cota esgotou devolve 409 "escolha outra".
+  - Tabelas `lotes` e `cotas` (criadas via `CREATE TABLE IF NOT EXISTS`, migração aguardada antes de
+    `app.listen()`; ref. em `schema.sql`). `cotas.expira_em` guarda o prazo da reserva individual.
+  - Status da **cota**: `livre` → `reservada` (só nome, `expira_em` = agora + `duracao_min` do lote)
+    → `comprovante` (anexou, `expira_em` limpo, conta no X/N) → `paga` (admin confere e confirma).
+    Status do **lote**: `ativo` → `esgotado` (100% vendido) / `encerrado` (só manual, "Encerrar agora").
+  - Reserva **atômica**: `UPDATE cotas SET status='reservada', expira_em=... WHERE status='livre'
+    AND lote_id IN (SELECT id FROM lotes WHERE status='ativo')` — dois clientes não pegam a mesma
+    cota; lote não expira mais por tempo, só por status.
   - Rotas: `GET/POST/DELETE /api/lotes`, `PUT /api/lotes/:id/encerrar`, `GET /api/lotes/:id`,
     **públicas** `POST /api/cotas/:id/reservar` e `/comprovante` (cliente sem token),
     protegidas `PUT /api/cotas/:id/confirmar` e `/liberar` (admin).
   - `postarNosGrupos()` usa o bot Baileys (delay 3s anti-ban). `verificarMarcosLote()` dispara 50%
     e esgotado uma única vez (flags `aviso50`/`aviso_esgotado`).
-  - Cron a cada minuto encerra lotes cujo cronômetro passou (reservas sem pagamento ficam pendentes
-    pro admin decidir). Listener "**fiquei de fora**" no bot: quem manda isso entra na lista de
-    espera (`lotes.espera`) do último lote do grupo e avisa o lotérico no WhatsApp pessoal.
+  - **Cron a cada minuto libera sozinhas as cotas `reservada` cujo `expira_em` já passou** (volta
+    pra `livre`, limpa nome/fone/comprovante) — antes fechava o lote inteiro e deixava a cota
+    travada em `reservada` pra sempre; comportamento trocado a pedido do usuário. Listener "**fiquei
+    de fora**" no bot: quem manda isso entra na lista de espera (`lotes.espera`) do último lote do
+    grupo e avisa o lotérico no WhatsApp pessoal.
 - **Frontend (`js/app.js` módulo `COTAS`)**:
-  - Admin: menu Admin → **🎟️ Cotas ao Vivo** (tela `lotes`) — criar lote (modal), acompanhar ao
-    vivo (cronômetro, X/N, grid de cotas com nome/status), **confirmar/liberar** cada cota, ver
-    comprovante, popup a cada venda. Polling de 3s + cronômetro de 1s.
-  - Cliente: nav **🎟️ Cotas** (tela `cotas`) + banner no Início quando há lote ativo — escolher
-    cota, reservar (nome pré-preenchido), anexar comprovante (base64), contador e aviso de 50%.
-  - Cota do cliente é lembrada em `localStorage['ltr_minhas_cotas']` (ele não tem login/token).
+  - Admin: menu Config. → **🧾 Cotas ao Vivo** (tela `lotes`) — criar lote (modal, label "Prazo pra
+    pagar após reservar"), acompanhar ao vivo (X/N, grid de cotas com nome/status + cronômetro por
+    cota reservada), **confirmar/liberar** cada cota, ver comprovante, popup a cada venda. Polling de
+    3s + cronômetro de 1s por cota (não mais um único cronômetro no cabeçalho do lote).
+  - Cliente: nav **🧾 Cotas** (tela `cotas`) + card **"Bolões Ativos"** em destaque no topo da Home
+    (substituiu o banner fino de antes) — escolher cota, reservar (nome pré-preenchido), anexar
+    comprovante (base64), ver o próprio cronômetro de pagamento contando.
+  - Cota do cliente é lembrada em `localStorage['ltr_minhas_cotas']` — `_minhaCota()` agora também
+    checa se a cota salva voltou pra `livre` (reserva expirou) e não mostra mais como "sua cota"
+    nesse caso.
 
 ## Funcionalidades implementadas
 
-- Splash screen + login (bcrypt + JWT); cliente entra só com nome + grupo (sem token)
+- Splash screen + login (bcrypt + JWT 24h, senha em texto puro); cliente entra com **nome completo +
+  telefone** (memorizado por aparelho, sem token)
 - Retry automático + fila offline nas escritas
-- Home admin/cliente — cards de loterias com prêmio ao vivo, próximo concurso e acumulado
-- Zé Loteca (mascote) — frases rotativas
-- **Grupos de Bolões** (navegação principal) — acompanhamento de pagamento por grupo
+- Home cliente — card **"Bolões Ativos"** em destaque no topo (leva pro Cotas ao Vivo) + resumo de
+  participação, depois cards de loterias com prêmio ao vivo, próximo concurso e acumulado
+- Home admin — cards de loterias com prêmio ao vivo
+- Palpiteiro (mascote, ex-"Zé Loteca") — bolinha do número dentro do card Bolões Ativos
+- Cotas ao Vivo / Bolão Relâmpago — cronômetro por reserva individual (não mais por lote), cota
+  libera sozinha se estourar o prazo sem comprovante
+- Premiação — admin cadastra prêmio por nome+telefone, apostador confirma com fogos de artifício
+- **Grupos de Bolões** (navegação do admin) — acompanhamento de pagamento por grupo
 - Bolões — criar, excluir (admin/dev), detalhes (Resultado / IA / Membros)
 - Membros — pagamento, comprovante, importação por colagem ou via bot do WhatsApp
 - Gerador de jogos (IA) — 40% quentes + 20% frios + aleatório
@@ -304,7 +327,8 @@ e mensagem de **esgotado** postados automaticamente no grupo pelo bot.
 - Resultados gerais de todas as loterias
 - Admin dashboard — total vendido, bolões, grupos, apostadores (real + estimativa), ticket médio
 - Cadastro de apostadores do grupo — independente de bolão, adicionar manual ou colar lista
-- Apostadores — visão unificada app + bolões + grupo, dar acesso, registrar todos, telefone editável
+- **Apostadores → "Banco de Clientes"** — separa quem entrou no app com nome+telefone (base
+  confiável pra divulgação, com botão "Copiar telefones") de quem só está em bolões/grupos
 - WhatsApp Manager + Cadastro Automático + Bot Baileys
 - Cartela do bolão — drag-and-drop (imagem/vídeo/PDF)
 - Estatísticas — filtros 7d/15d/30d/Tudo/Personalizado, Chart.js
@@ -312,6 +336,50 @@ e mensagem de **esgotado** postados automaticamente no grupo pelo bot.
 - Painel Dev — bloquear app, licença, logs, reset, WhatsApp Bot
 - Temas Sazonais — 10 temas com partículas, faixa festiva
 - UptimeRobot — pinga `/api/health` a cada 5 min
+- Seta de voltar aparece em qualquer tela que não seja a Início, não importa como o usuário chegou nela
+
+## Sessão 10-11/07/2026 — Login por telefone, Bolões Ativos, Premiação, Banco de Clientes, Palpiteiro, UX
+
+Retomada de um trabalho que tinha sido interrompido (limite de gasto mensal, antes de qualquer
+código) sobre 4 funcionalidades grandes. Decidiu entregar em etapas testadas em produção uma de
+cada vez.
+
+**Etapa 1** (commits `4cee79a`, `d4abc47`): login do cliente virou nome completo + telefone
+(memorizado por aparelho); card "Bolões Ativos" na Home substituiu o banner fino de antes; fix da
+migração `lotes`/`cotas` não aguardada antes de `app.listen()`.
+
+**Etapa 2** (commits `b04b806`, `38b66e7`, `3f6745e`): **bug real corrigido** — o registro do
+apostador no login chamava `POST /api/usuarios`, rota que exige token de admin; cliente nunca tem
+token, então sempre dava 401 silencioso e o apostador nunca persistia de verdade. Nova rota pública
+`POST /api/usuarios/registrar` resolve. **Premiação** nova: admin cadastra prêmio por
+nome+telefone, apostador vê fogos de artifício automáticos no login quando tem premiação pendente
+e confirma; ícone 🏆 no header leva pro histórico "Minhas Premiações".
+
+**Cronômetro do Cotas ao Vivo virou por reserva individual** (ver seção própria acima) — achado
+revisando o pedido original do usuário linha por linha, confirmado e corrigido, validado em
+produção com lote de teste real.
+
+**Ajustes depois da Etapa 2** (todos em produção):
+- Loteca removida do catálogo (commit `d9b78ed`, confirmado com o cliente) — ver seção "Loterias suportadas".
+- Tela "Apostadores" reorganizada em **"Banco de Clientes"** + aba "Admin"→**"Config."** (commit `20d0d80`).
+- Mascote "Zé Loteca"→**"Palpiteiro"** (commit `f009fa8`, confirmado com o cliente) — só o nome
+  exibido mudou, imagem e identificadores internos (`ZE`, `.ze-*`) continuam iguais.
+- **Quatro ajustes de UX numa leva só** (commit `171329c`): (1) senha do admin/dev deixou de ser
+  mascarada; (2) ícone 🎟️ (parecia ticket de cinema) trocado por 🧾 em todo o app; (3) bolinha do
+  Palpiteiro saiu de flutuar sobre a barra inferior e foi pro card "Bolões Ativos", logo após "toque
+  para conferir" — a bolha de fala das frases rotativas (`FRASES_ZE`) foi removida junto por não ter
+  mais lugar óbvio (código ficou inerte com guarda de nulo, não quebra); (4) seta de voltar corrigida
+  em duas rodadas — a primeira tentativa (`R.irTab()`, resetando a pilha nos ícones de barra) ainda
+  deixava faltando seta ao entrar em telas direto pela barra inferior; corrigido de vez (commit
+  `f438ee8`) pra regra simples: seta aparece em qualquer tela que não seja a Início, sempre.
+- Fix de um achado durante o teste do item 4: texto do card "Palpiteiro te ajuda" sobrepondo a
+  imagem do mascote — `padding-right` no texto + imagem um pouco menor (commit `8e51ffb`).
+- **Esclarecimento sem mudança de código:** tela "Premiação" mostrar o próprio nome mesmo sem
+  premiação não é bug — é a tela pessoal "Minhas Premiações", sempre mostra quem está logado.
+
+**Cuidado de automação anotado:** botões que disparam `confirm()` nativo travam a aba inteira
+quando clicados via automação de browser — usar `DB.x.del(id)`/`_api.del(...)` direto no console
+pra apagar dados de teste, nunca clicar no botão que abre o `confirm()`.
 
 ## Dados de teste
 
@@ -342,6 +410,11 @@ Render atualiza frontend + backend automaticamente em ~1-3 min.
 
 ## Próximos passos pendentes
 
+0. **Etapa 3 — Bolão Anual/parcelado genérico** (tipo Mega da Virada, mas reaproveitável, não
+   hardcoded pra dezembro): admin cadastra bolão com valor mensal e duração configuráveis;
+   participante paga mensal ou quita de uma vez; upload de comprovante exige mês de referência
+   (aceita texto livre, avisa se não vier); painel do admin = planilha completa (mês × pessoa) com
+   gráficos de quitado/em dia/inadimplente. Escopo já combinado com o usuário — próxima etapa.
 1. **Chip brasileiro** — ao voltar ao Brasil: desconectar bot, novo chip, reconectar via QR
 2. **Credenciamento Caixa (SISGEL)** — acesso a notificações de venda em tempo real, tipo ConectaLot
 3. **Push notifications PWA** — pro admin, quando integração Caixa for aprovada
