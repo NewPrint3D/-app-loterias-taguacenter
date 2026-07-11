@@ -1,5 +1,5 @@
 /* ====================================
-   ZÉ LOTECA — ESTILOS
+   PALPITEIRO — ESTILOS
    ==================================== */
 
 /* Garante que [hidden] sempre vença qualquer display do CSS */
@@ -259,7 +259,7 @@ body {
 .pag-nm { font-weight: 600; font-size: .88rem; }
 .comp-img { width:100%; border-radius:var(--rsm); margin-top:8px; max-height:200px; object-fit:contain; }
 
-/* ---- ZÉ LOTECA MASCOTE (dentro da barra de nav) ---- */
+/* ---- PALPITEIRO MASCOTE (dentro da barra de nav) ---- */
 #ze {
   position: fixed;
   bottom: calc(var(--nh)/2 - 14px); /* centralizado na altura do nav */

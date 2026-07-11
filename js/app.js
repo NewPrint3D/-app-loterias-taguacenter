@@ -589,7 +589,7 @@ const IA = {
 };
 
 // =============================================
-// ZÉ LOTECA MASCOTE
+// PALPITEIRO MASCOTE
 // =============================================
 const ZE = {
   _nt: null,
@@ -846,7 +846,7 @@ const R = {
       </div>
 
       <button class="btn btn-p btn-f mt4 mb4" onclick="R._iaClick('${ltId}')">
-        <img src="img/ze-loteca.png" class="ze-btn-ico" alt="Zé Loteca"> Quer que o Zé Loteca te ajude a escolher os números?
+        <img src="img/ze-loteca.png" class="ze-btn-ico" alt="Palpiteiro"> Quer que o Palpiteiro te ajude a escolher os números?
       </button>`;
   },
 
@@ -855,7 +855,7 @@ const R = {
   _cotas(){ COTAS.entrarCliente(); },
   _lotes(){ COTAS.entrarAdmin(); },
 
-  // ---- ZÉ LOTECA — ESTATÍSTICAS E GERADOR ----
+  // ---- PALPITEIRO — ESTATÍSTICAS E GERADOR ----
   async _ia(params={}) {
     $('h-title').innerHTML='<img src="img/logo.png" alt="Lotérica Taguacenter" class="h-logo-img">';
     const ltId = S.loteria || 'megasena';
@@ -864,8 +864,8 @@ const R = {
 
     $('view-ia').innerHTML=`
       <div class="ze-card">
-        <div class="ze-card-title">🎯 Zé Loteca te ajuda</div>
-        <div class="ze-card-msg">"Consulte estatísticas, números quentes e frios, e deixa o Zé gerar seu jogo com inteligência — mas lembre: sorteio é sorteio, vai na fé! 🍀"</div>
+        <div class="ze-card-title">🎯 Palpiteiro te ajuda</div>
+        <div class="ze-card-msg">"Consulte estatísticas, números quentes e frios, e deixa o Palpiteiro gerar seu jogo com inteligência — mas lembre: sorteio é sorteio, vai na fé! 🍀"</div>
       </div>
       <div class="fg mb12">
         <label>Escolha a loteria</label>
@@ -906,7 +906,7 @@ const R = {
       <div class="jogo-card" style="border-color:${lt.cor}40">
         <div class="jogo-header">
           <div>
-            <div class="jogo-titulo">🎲 Zé Loteca gera seu jogo</div>
+            <div class="jogo-titulo">🎲 Palpiteiro gera seu jogo</div>
             <div class="jogo-sub">Mistura inteligente de números 🔥 quentes + números 🧊 frios + aleatórios</div>
           </div>
           <span class="jogo-lt">${lt.emoji} ${lt.nome}</span>
