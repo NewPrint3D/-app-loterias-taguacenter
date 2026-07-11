@@ -728,6 +728,34 @@ app.post('/api/bolao-parcelado-pagamentos', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Admin marca vários meses como pagos de uma vez (bolão que já estava em andamento antes de
+// existir no app — pagamentos presenciais/anteriores) — evita clicar mês a mês. Já entra
+// diretamente como 'confirmado' (ação do próprio admin, não precisa de aprovação depois).
+app.post('/api/bolao-parcelado-pagamentos/lote', async (req, res) => {
+  const { participante_id, meses, valor } = req.body;
+  if (!participante_id || !Array.isArray(meses) || !meses.length) {
+    return res.status(400).json({ ok: false, error: 'Dados incompletos.' });
+  }
+  try {
+    for (const mesRaw of meses) {
+      const mes = parseInt(mesRaw, 10);
+      if (!mes || mes < 1 || mes > 12) continue;
+      await pool.query(
+        `INSERT INTO bolao_parcelado_pagamentos(id,participante_id,mes,valor,status,enviado_em,confirmado_em)
+         VALUES($1,$2,$3,$4,'confirmado',NOW(),NOW())
+         ON CONFLICT(participante_id,mes) DO UPDATE SET valor=$4, status='confirmado', confirmado_em=NOW()`,
+        [crypto.randomUUID(), participante_id, mes, +valor || 0]
+      );
+    }
+    const { rows } = await pool.query('SELECT mes_quitacao_previsto FROM bolao_parcelado_participantes WHERE id=$1', [participante_id]);
+    const mesQuitacao = rows[0]?.mes_quitacao_previsto;
+    if (mesQuitacao && meses.map(m=>+m).includes(mesQuitacao)) {
+      await pool.query(`UPDATE bolao_parcelado_participantes SET quitado=true, quitado_em=NOW() WHERE id=$1`, [participante_id]);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // Admin confirma/rejeita um comprovante mensal. Se confirmado e o mês bater com o mês de
 // quitação previsto do participante, marca o participante inteiro como quitado.
 app.put('/api/bolao-parcelado-pagamentos/:id/status', async (req, res) => {

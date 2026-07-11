@@ -332,6 +332,23 @@ const DB = {
       }
       _api.post('/api/bolao-parcelado-pagamentos', pg);
     },
+    // Admin marca vários meses como pagos de uma vez (histórico anterior ao bolão entrar no app).
+    marcarPagoLote: (participanteId, meses, valor) => {
+      for (const b of (S.cache.boloesParcelados||[])) {
+        const p = (b.participantes||[]).find(x=>x.id===participanteId);
+        if (!p) continue;
+        p.pagamentos = p.pagamentos || [];
+        const agora = new Date().toISOString();
+        meses.forEach(mes => {
+          const i = p.pagamentos.findIndex(x=>x.mes===mes);
+          const pg = { id: i>=0?p.pagamentos[i].id:uid(), participante_id:participanteId, mes, valor, status:'confirmado', enviado_em:agora, confirmado_em:agora };
+          if (i>=0) p.pagamentos[i] = pg; else p.pagamentos.push(pg);
+        });
+        if (p.mes_quitacao_previsto && meses.includes(p.mes_quitacao_previsto)) { p.quitado = true; p.quitado_em = agora; }
+        break;
+      }
+      _api.post('/api/bolao-parcelado-pagamentos/lote', { participante_id:participanteId, meses, valor });
+    },
     // Confirmar/rejeitar é rota própria protegida (admin) — atualiza local e chama a rota de status.
     confirmarPagamento: (pagamentoId, status) => {
       for (const b of (S.cache.boloesParcelados||[])) {
@@ -2028,9 +2045,12 @@ const R = {
         <div class="stat-card"><div class="sv">${fmt$(esperado)}</div><div class="sl">Esperado</div></div>
         <div class="stat-card"><div class="sv">${parts.length}</div><div class="sl">Participantes</div></div>
       </div>
-      <div class="fxb mb8 mt12">
+      <div class="fxb mb8 mt12" style="flex-wrap:wrap;gap:6px">
         <div class="sectt">Planilha (${b.ano})</div>
-        <button class="btn btn-p btn-sm" onclick="R._mNovoParticipanteAnual()">+ Participante</button>
+        <div class="fx" style="gap:6px">
+          <button class="btn btn-o btn-sm" onclick="R._mImportarGrupoAnual()">📱 Importar do grupo</button>
+          <button class="btn btn-p btn-sm" onclick="R._mNovoParticipanteAnual()">+ Participante</button>
+        </div>
       </div>
       <div class="anual-tbl-wrap">
         <table class="anual-tbl">
@@ -2040,7 +2060,7 @@ const R = {
               <tr>
                 <td>${p.nome}<div class="txs muted">${p.fone}</div></td>
                 ${meses.map(m => { const c=R._anualCelula(b,p,m); return `<td class="${c.cls}" title="${c.titulo}" ${c.id?`onclick="R._verPagAnual('${c.id}')"`:''}>${c.icon}</td>`; }).join('')}
-                <td><button class="btn-ico" title="Remover" onclick="R._delParticipanteAnual('${p.id}')">✕</button></td>
+                <td style="white-space:nowrap"><button class="btn-ico" title="Marcar meses pagos" onclick="R._mMarcarLoteAnual('${p.id}')">📅</button><button class="btn-ico" title="Remover" onclick="R._delParticipanteAnual('${p.id}')">✕</button></td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -2094,6 +2114,84 @@ const R = {
     if (!confirm('Remover esse participante e todo o histórico de pagamentos dele?')) return;
     DB.boloesParcelados.delParticipante(S.anualAtual, id);
     R._anualDet();
+  },
+
+  // Importa participantes já cadastrados no "Apostadores do grupo" (grupo_membros) — evita
+  // cadastrar manual um por um quando o bolão já reaproveita a galera de um grupo existente.
+  _mImportarGrupoAnual() {
+    const grupos = DB.grupos.list();
+    MODAL.open(`
+      <div class="m-title">📱 Importar participantes do grupo</div>
+      ${!grupos.length ? '<p class="txs muted">Nenhum grupo cadastrado ainda.</p>' : `
+      <div class="fg"><label>Grupo</label>
+        <select id="ig-grupo" onchange="R._carregarRosterGrupoAnual(this.value)">
+          <option value="">Selecionar...</option>
+          ${grupos.map(g=>`<option value="${g.id}">${g.nome}</option>`).join('')}
+        </select>
+      </div>
+      <div id="ig-lista"></div>`}
+    `);
+  },
+  _carregarRosterGrupoAnual(grupoId) {
+    const el = $('ig-lista'); if (!el) return;
+    if (!grupoId) { el.innerHTML=''; return; }
+    const b = DB.boloesParcelados.get(S.anualAtual);
+    const jaTem = new Set((b.participantes||[]).map(p=>p.fone));
+    const roster = DB.grupoMembros.list(grupoId).filter(m=>m.nome && m.nome.trim().toLowerCase()!=='sem nome');
+    if (!roster.length) { el.innerHTML = '<p class="txs muted mt8">Nenhum apostador identificado nesse grupo ainda.</p>'; return; }
+    el.innerHTML = `
+      <p class="txs muted mt8 mb4">${roster.length} apostador${roster.length>1?'es':''} — desmarque quem não participa deste bolão:</p>
+      <div style="max-height:40vh;overflow-y:auto">
+        ${roster.map(m=>{
+          const jaEsta = jaTem.has(normalizarFone(m.fone||''));
+          return `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;${jaEsta?'opacity:.45':''}">
+            <input type="checkbox" class="igm" data-nome="${m.nome.replace(/"/g,'&quot;')}" data-fone="${m.fone||''}" ${jaEsta?'disabled':'checked'}>
+            <span>${m.nome}${jaEsta?' <span class="txs muted">(já participa)</span>':''}</span>
+          </label>`;
+        }).join('')}
+      </div>
+      <button class="btn btn-p btn-f mt12" onclick="R._importarSelecionadosAnual()">Importar selecionados</button>`;
+  },
+  _importarSelecionadosAnual() {
+    const checks = Array.from(document.querySelectorAll('.igm:checked'));
+    if (!checks.length) { TOAST.show('Selecione ao menos um apostador.', 'err'); return; }
+    let semFone = 0;
+    checks.forEach(c => {
+      const nome = c.dataset.nome, fone = c.dataset.fone;
+      if (!fone || fone.replace(/\D/g,'').length < 10) { semFone++; return; }
+      DB.boloesParcelados.salvarParticipante({ id:uid(), bolao_parcelado_id:S.anualAtual, nome, fone:normalizarFone(fone) });
+    });
+    const importados = checks.length - semFone;
+    MODAL.close();
+    R._anualDet();
+    TOAST.show(`👤 ${importados} participante${importados!==1?'s':''} importado${importados!==1?'s':''}!${semFone?` (${semFone} sem telefone válido, ignorado${semFone>1?'s':''})`:''}`, importados?'ok':'err');
+  },
+
+  // Marca vários meses como pagos de uma vez — pro bolão que já estava em andamento antes de
+  // entrar no app (pagamentos presenciais/anteriores), sem precisar clicar mês a mês.
+  _mMarcarLoteAnual(participanteId) {
+    const b = DB.boloesParcelados.get(S.anualAtual);
+    const p = (b.participantes||[]).find(x=>x.id===participanteId);
+    if (!p) return;
+    const meses = Array.from({length:b.duracao_meses}, (_,i)=>i+1);
+    MODAL.open(`
+      <div class="m-title">📅 Marcar meses pagos — ${p.nome}</div>
+      <p class="txs muted mb8">Selecione os meses já pagos (ex: presencialmente, antes de usar o app).</p>
+      <div class="fg" style="display:flex;flex-wrap:wrap;gap:10px">
+        ${meses.map(m=>`<label style="display:flex;align-items:center;gap:4px">
+          <input type="checkbox" class="mlm" value="${m}" ${(p.pagamentos||[]).some(pg=>pg.mes===m&&pg.status==='confirmado')?'checked':''}>
+          ${MESES_NOMES[m-1].slice(0,3)}</label>`).join('')}
+      </div>
+      <button class="btn btn-p btn-f mt8" onclick="R._salvarLoteAnual('${participanteId}')">Marcar como pagos</button>`);
+  },
+  _salvarLoteAnual(participanteId) {
+    const b = DB.boloesParcelados.get(S.anualAtual);
+    const meses = Array.from(document.querySelectorAll('.mlm:checked')).map(el=>+el.value);
+    if (!meses.length) { TOAST.show('Selecione ao menos um mês.', 'err'); return; }
+    DB.boloesParcelados.marcarPagoLote(participanteId, meses, b.valor_mensal);
+    MODAL.close();
+    R._anualDet();
+    TOAST.show(`✓ ${meses.length} mês${meses.length>1?'es':''} marcado${meses.length>1?'s':''} como pago${meses.length>1?'s':''}!`, 'ok');
   },
   _verPagAnual(id) {
     const b = DB.boloesParcelados.get(S.anualAtual);
