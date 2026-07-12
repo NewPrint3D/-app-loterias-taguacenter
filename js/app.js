@@ -2055,8 +2055,13 @@ const R = {
     try {
       const dados = await _api.get('/api/boloes-parcelados');
       if (Array.isArray(dados) && S.tela === 'anualDet') {
+        // Só re-renderiza (e recria os gráficos) se os dados desse bolão realmente mudaram —
+        // senão o Chart.js reanima as barras do zero a cada poll mesmo sem nada novo, dando a
+        // impressão de gráfico "balançando" sozinho a cada 4s.
+        const antes = JSON.stringify(DB.boloesParcelados.get(S.anualAtual));
         S.cache.boloesParcelados = normalizarBoloesParcelados(dados);
-        R._renderAnualDet();
+        const depois = JSON.stringify(DB.boloesParcelados.get(S.anualAtual));
+        if (depois !== antes) R._renderAnualDet();
       }
     } catch {}
     if (S.tela === 'anualDet') setTimeout(() => R._anualPoll(), 4000);
