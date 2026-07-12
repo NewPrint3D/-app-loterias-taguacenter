@@ -386,6 +386,19 @@ app.put('/api/pagamentos/:id/status', async (req, res) => {
 // COTAS AO VIVO — lotes de cotas com cronômetro e reserva atômica
 // ============================================================
 
+// Manda uma mensagem individual via bot (ex: avisar um apostador que o comprovante foi ignorado).
+// Silencioso se o bot estiver desconectado ou sem telefone — quem chama decide se avisa o admin.
+async function enviarWhatsAppIndividual(fone, texto) {
+  if (!botSock || botStatus !== 'conectado' || !fone) return false;
+  try {
+    await botSock.sendMessage(`${fone}@s.whatsapp.net`, { text: texto });
+    return true;
+  } catch (e) {
+    console.error('Falha ao enviar WhatsApp individual —', e.message);
+    return false;
+  }
+}
+
 // Posta um texto em vários grupos via bot (delay anti-ban). Devolve resultado por grupo.
 async function postarNosGrupos(grupos, texto) {
   if (!botSock || botStatus !== 'conectado') return { ok: false, motivo: 'bot_desconectado' };
@@ -760,15 +773,16 @@ app.post('/api/bolao-parcelado-pagamentos/lote', async (req, res) => {
 // quitação previsto do participante, marca o participante inteiro como quitado; se um pagamento
 // que tinha disparado essa quitação for revertido (erro de digitação/clique do admin), desfaz.
 app.put('/api/bolao-parcelado-pagamentos/:id/status', async (req, res) => {
-  const { status } = req.body;
+  const { status, motivo } = req.body;
   if (!['pendente', 'confirmado', 'rejeitado'].includes(status)) {
     return res.status(400).json({ ok: false, error: 'Status inválido.' });
   }
   try {
     const confirmadoEm = status === 'confirmado' ? 'NOW()' : 'NULL';
+    const motivoRejeicao = status === 'rejeitado' ? String(motivo || '').trim().slice(0, 300) : null;
     const { rows } = await pool.query(
-      `UPDATE bolao_parcelado_pagamentos SET status=$1, confirmado_em=${confirmadoEm} WHERE id=$2 RETURNING participante_id, mes`,
-      [status, req.params.id]
+      `UPDATE bolao_parcelado_pagamentos SET status=$1, confirmado_em=${confirmadoEm}, motivo_rejeicao=$3 WHERE id=$2 RETURNING participante_id, mes`,
+      [status, req.params.id, motivoRejeicao]
     );
     if (rows.length) {
       const { participante_id, mes } = rows[0];
@@ -784,6 +798,16 @@ app.put('/api/bolao-parcelado-pagamentos/:id/status', async (req, res) => {
            WHERE id=$1 AND mes_quitacao_previsto=$2 AND quitado=true`,
           [participante_id, mes]
         );
+      }
+      // Comprovante ignorado — avisa o apostador automaticamente no WhatsApp dele (fire-and-forget,
+      // não atrasa a resposta pro admin; falha silenciosa se o bot estiver desconectado).
+      if (status === 'rejeitado') {
+        const part = await pool.query('SELECT fone FROM bolao_parcelado_participantes WHERE id=$1', [participante_id]);
+        const fone = part.rows[0]?.fone;
+        if (fone) {
+          const texto = `${motivoRejeicao ? motivoRejeicao + '\n\n' : ''}Por favor, regularize quanto antes e volte a nos enviar o comprovante.`;
+          enviarWhatsAppIndividual(fone, texto).catch(() => {});
+        }
       }
     }
     res.json({ ok: true });
@@ -999,6 +1023,9 @@ const _migracaoBoloesParcelados = (async () => {
       confirmado_em TIMESTAMPTZ,
       UNIQUE(participante_id, mes)
     )`);
+    // Justificativa do admin ao ignorar/rejeitar um comprovante — enviada automaticamente pro
+    // apostador via WhatsApp (ver rota PUT .../status).
+    await pool.query(`ALTER TABLE bolao_parcelado_pagamentos ADD COLUMN IF NOT EXISTS motivo_rejeicao TEXT`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_bpp_bolao ON bolao_parcelado_participantes(bolao_parcelado_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_bppag_part ON bolao_parcelado_pagamentos(participante_id)`);
     console.log('Tabelas de Bolão Anual/Parcelado prontas.');

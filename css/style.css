@@ -548,6 +548,7 @@ input:checked + .sl2::before { transform: translateX(19px); }
 .anual-tbl tbody tr:last-child td { border-bottom: none; }
 .anual-tbl td.cel-pago, .anual-tbl td.cel-pend, .anual-tbl td.cel-atraso, .anual-tbl td.cel-quitado { cursor: pointer; }
 .anual-tbl td.cel-futuro { color: var(--border); }
+.anual-tbl tbody tr.anual-tbl-eu td { background: rgba(16,185,129,.12); }
 
 /* ---- DESTINATÁRIOS WHATSAPP ---- */
 .dest-tabs  { display: flex; gap: 6px; }

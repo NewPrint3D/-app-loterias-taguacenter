@@ -348,14 +348,16 @@ const DB = {
       }
       _api.post('/api/bolao-parcelado-pagamentos/lote', { participante_id:participanteId, meses, valor });
     },
-    // Confirmar/rejeitar é rota própria protegida (admin) — atualiza local e chama a rota de status.
-    confirmarPagamento: (pagamentoId, status) => {
+    // Confirmar/rejeitar é rota própria protegida (admin) — atualiza local e chama a rota de
+    // status. Ao "ignorar" (rejeitado) com motivo, o backend avisa o apostador no WhatsApp sozinho.
+    confirmarPagamento: (pagamentoId, status, motivo) => {
       for (const b of (S.cache.boloesParcelados||[])) {
         for (const p of (b.participantes||[])) {
           const pg = (p.pagamentos||[]).find(x=>x.id===pagamentoId);
           if (pg) {
             pg.status = status;
             pg.confirmado_em = status==='confirmado' ? new Date().toISOString() : null;
+            pg.motivo_rejeicao = status==='rejeitado' ? (motivo||'') : null;
             if (p.mes_quitacao_previsto === pg.mes) {
               if (status==='confirmado') { p.quitado = true; p.quitado_em = new Date().toISOString(); }
               else if (p.quitado) { p.quitado = false; p.quitado_em = null; }
@@ -363,7 +365,7 @@ const DB = {
           }
         }
       }
-      _api.put(`/api/bolao-parcelado-pagamentos/${pagamentoId}/status`, { status });
+      _api.put(`/api/bolao-parcelado-pagamentos/${pagamentoId}/status`, { status, motivo });
     },
   },
   ctrl: {
@@ -878,13 +880,33 @@ const R = {
   },
 
   // ---- MEU BOLÃO ANUAL (cliente) ----
+  // Entra e liga o polling — a planilha do grupo (todos os participantes) fica sincronizada com o
+  // admin sozinha, sem precisar recarregar o app.
   _meuAnual() {
+    const info = DB.boloesParcelados.minhaParticipacao();
+    if (!info) { R.ir('home'); return; }
+    R._renderMeuAnual();
+    R._meuAnualPoll();
+  },
+  async _meuAnualPoll() {
+    if (S.tela !== 'meuAnual') return;
+    try {
+      const dados = await _api.get('/api/boloes-parcelados');
+      if (Array.isArray(dados) && S.tela === 'meuAnual') {
+        S.cache.boloesParcelados = normalizarBoloesParcelados(dados);
+        R._renderMeuAnual();
+      }
+    } catch {}
+    if (S.tela === 'meuAnual') setTimeout(() => R._meuAnualPoll(), 5000);
+  },
+  _renderMeuAnual() {
     const info = DB.boloesParcelados.minhaParticipacao();
     if (!info) { R.ir('home'); return; }
     const { bolao:b, participante:p } = info;
     $('h-title').textContent = b.nome;
     const meses = Array.from({length:b.duracao_meses}, (_,i)=>i+1);
     const pagos = (p.pagamentos||[]).filter(pg=>pg.status==='confirmado').length;
+    const parts = b.participantes||[];
 
     // "Em aberto" = mês corrente (ainda não venceu, mas já pode pagar) OU mês já vencido — os dois
     // casos que o usuário pode quitar agora. Mês futuro não aparece aqui (ainda não chegou a vez).
@@ -902,14 +924,21 @@ const R = {
         <div class="txs muted mb8">${fmt$(b.valor_mensal)}/mês × ${b.duracao_meses} = ${fmt$(b.valor_total)}</div>
         <div class="txs muted">${pagos}/${b.duracao_meses} meses pagos</div>
       </div>
-      <div class="anual-tbl-wrap">
+      <div class="sectt mb8">Planilha do grupo (${b.ano})</div>
+      <div class="anual-tbl-wrap mb16">
         <table class="anual-tbl">
-          <thead><tr>${meses.map(m=>`<th>${MESES_NOMES[m-1].slice(0,3)}</th>`).join('')}</tr></thead>
-          <tbody><tr>${meses.map(m=>{ const c=R._anualCelula(b,p,m); return `<td class="${c.cls}" title="${c.titulo}">${c.icon}</td>`; }).join('')}</tr></tbody>
+          <thead><tr><th>Participante</th>${meses.map(m=>`<th>${MESES_NOMES[m-1].slice(0,3)}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${parts.map(pp => `
+              <tr class="${pp.id===p.id?'anual-tbl-eu':''}">
+                <td>${pp.nome}${pp.id===p.id?' <span class="txs muted">(você)</span>':''}</td>
+                ${meses.map(m=>{ const c=R._anualCelula(b,pp,m); return `<td class="${c.cls}" title="${c.titulo}">${c.icon}</td>`; }).join('')}
+              </tr>`).join('')}
+          </tbody>
         </table>
       </div>
       ${abertos.length ? `
-      <div class="sectt mb8 mt16">Meses em aberto</div>
+      <div class="sectt mb8 mt16">Meus meses em aberto</div>
       ${abertos.map(m => {
         const pg = (p.pagamentos||[]).find(x=>x.mes===m);
         const pendente = pg?.status==='pendente', rejeitado = pg?.status==='rejeitado';
@@ -917,8 +946,9 @@ const R = {
           <div class="fxb">
             <div style="font-weight:700">${MESES_NOMES[m-1]}${m===mesAtual?' <span class="txs muted">(mês corrente)</span>':''}</div>
             ${pendente?'<span class="badge b-pend">⏳ Aguardando confirmação</span>':''}
-            ${rejeitado?'<span class="badge" style="background:var(--red);color:#fff">✗ Rejeitado</span>':''}
+            ${rejeitado?'<span class="badge" style="background:var(--red);color:#fff">⚠️ Verifique seu WhatsApp</span>':''}
           </div>
+          ${rejeitado && pg?.motivo_rejeicao ? `<div class="txs mt4" style="color:var(--red)">${pg.motivo_rejeicao}</div>` : ''}
           <button class="btn ${pendente||rejeitado?'btn-o':'btn-p'} btn-f mt8" onclick="R._mCompAnualMes(${m})">📎 ${pendente||rejeitado?'Reenviar':'Anexar'} comprovante</button>
         </div>`;
       }).join('')}
@@ -948,7 +978,7 @@ const R = {
     const { bolao:b, participante:p } = info;
     DB.boloesParcelados.enviarComprovante({ id:uid(), participante_id:p.id, mes, valor:b.valor_mensal, comprovante:$('ca-th')?.src||null, status:'pendente', enviado_em:new Date().toISOString() });
     MODAL.close();
-    R._meuAnual();
+    R._renderMeuAnual();
     TOAST.show('📎 Comprovante enviado! Aguarde confirmação.', 'ok');
   },
   _mQuitacaoAnual() {
@@ -968,7 +998,7 @@ const R = {
     const mes = +$('ca-mes-quit').value;
     DB.boloesParcelados.declararQuitacao(info.participante.id, mes);
     MODAL.close();
-    R._meuAnual();
+    R._renderMeuAnual();
     TOAST.show('💰 Quitação declarada! Envie o comprovante desse mês quando for pagar.', 'ok');
   },
 
@@ -2038,8 +2068,8 @@ const R = {
     if (p.quitado) return { icon:'💰', cls:'cel-quitado', titulo:'Quitado' };
     const pg = (p.pagamentos||[]).find(x=>x.mes===m);
     if (pg?.status==='confirmado') return { icon:'✅', cls:'cel-pago', titulo:'Pago', id:pg.id };
-    if (pg?.status==='pendente')   return { icon:'⏳', cls:'cel-pend', titulo:'Aguardando confirmação', id:pg.id };
-    if (pg?.status==='rejeitado')  return { icon:'🔴', cls:'cel-atraso', titulo:'Comprovante rejeitado', id:pg.id };
+    if (pg?.status==='pendente')   return { icon:'⏳', cls:'cel-pend', titulo:'Comprovante recebido — pendente de confirmação', id:pg.id };
+    if (pg?.status==='rejeitado')  return { icon:'🔴', cls:'cel-atraso', titulo:'Comprovante ignorado — verifique o WhatsApp', id:pg.id };
     if (R._anualMesPassou(b, m))   return { icon:'🔴', cls:'cel-atraso', titulo:'Inadimplente' };
     return { icon:'—', cls:'cel-futuro', titulo:'Ainda não venceu' };
   },
@@ -2268,21 +2298,40 @@ const R = {
     let pg=null, part=null;
     for (const p of (b?.participantes||[])) { const f=(p.pagamentos||[]).find(x=>x.id===id); if (f) { pg=f; part=p; break; } }
     if (!pg) return;
+    const statusTxt = { pendente:'comprovante recebido — pendente de confirmação', confirmado:'pago', rejeitado:'comprovante ignorado' }[pg.status] || pg.status;
     MODAL.open(`
       <div class="m-title">📎 ${part.nome} — ${MESES_NOMES[pg.mes-1]}</div>
       ${pg.comprovante ? `<img src="${pg.comprovante}" style="width:100%;border-radius:8px;margin-bottom:10px">` : '<p class="txs muted">Sem imagem anexada.</p>'}
-      <div class="txs muted mb8">${fmt$(pg.valor)} · status: ${pg.status}</div>
-      ${pg.status!=='confirmado' ? `<button class="btn btn-p btn-f mb8" onclick="R._confirmarPagAnual('${id}','confirmado')">✓ Confirmar pagamento</button>` : ''}
-      ${pg.status!=='rejeitado' ? `<button class="btn btn-d btn-f mb8" onclick="R._confirmarPagAnual('${id}','rejeitado')">✗ Rejeitar</button>` : ''}
+      <div class="txs muted mb8">${fmt$(pg.valor)} · status: ${statusTxt}</div>
+      ${pg.status==='rejeitado' && pg.motivo_rejeicao ? `<div class="txs mb8" style="color:var(--red)">Motivo enviado ao apostador: "${pg.motivo_rejeicao}"</div>` : ''}
+      ${pg.status!=='confirmado' ? `<button class="btn btn-p btn-f mb8" onclick="R._confirmarPagAnual('${id}','confirmado')">✓ Comprovante correto — marcar como pago</button>` : ''}
+      ${pg.status!=='rejeitado' ? `<button class="btn btn-d btn-f mb8" onclick="R._mIgnorarPagAnual('${id}')">🚫 Comprovante ignorado</button>` : ''}
       ${pg.status!=='pendente' ? `<button class="btn btn-o btn-f" onclick="R._confirmarPagAnual('${id}','pendente')">↩️ Reverter para pendente</button>` : ''}
     `);
+  },
+  // Comprovante ignorado exige uma justificativa curta — enviada automaticamente pro WhatsApp do
+  // apostador (backend monta a mensagem final com o texto padrão de "regularize e reenvie").
+  _mIgnorarPagAnual(id) {
+    MODAL.open(`
+      <div class="m-title">🚫 Comprovante ignorado</div>
+      <p class="txs muted mb8">Explique rapidamente o motivo — o apostador recebe essa mensagem automaticamente no WhatsApp dele.</p>
+      <div class="fg"><textarea id="ig-motivo" maxlength="200" placeholder="Ex: comprovante ilegível, valor errado, mês não bate..."></textarea></div>
+      <button class="btn btn-d btn-f" onclick="R._confirmarIgnorarPagAnual('${id}')">Enviar e avisar no WhatsApp</button>
+    `);
+  },
+  _confirmarIgnorarPagAnual(id) {
+    const motivo = $('ig-motivo')?.value?.trim() || '';
+    DB.boloesParcelados.confirmarPagamento(id, 'rejeitado', motivo);
+    MODAL.close();
+    R._renderAnualDet();
+    TOAST.show('🚫 Comprovante ignorado — apostador avisado no WhatsApp.', 'err');
   },
   _confirmarPagAnual(id, status) {
     DB.boloesParcelados.confirmarPagamento(id, status);
     MODAL.close();
     R._renderAnualDet();
-    const msgs = { confirmado:'✓ Pagamento confirmado!', rejeitado:'Comprovante rejeitado.', pendente:'↩️ Revertido para pendente.' };
-    TOAST.show(msgs[status], status==='confirmado'?'ok':status==='pendente'?'ok':'err');
+    const msgs = { confirmado:'✓ Pagamento confirmado!', pendente:'↩️ Revertido para pendente.' };
+    TOAST.show(msgs[status], 'ok');
   },
 
   async _importarWA(grupoId, jid) {
