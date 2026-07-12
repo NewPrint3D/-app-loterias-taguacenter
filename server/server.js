@@ -756,8 +756,9 @@ app.post('/api/bolao-parcelado-pagamentos/lote', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// Admin confirma/rejeita um comprovante mensal. Se confirmado e o mês bater com o mês de
-// quitação previsto do participante, marca o participante inteiro como quitado.
+// Admin confirma/rejeita/reverte um comprovante mensal. Se confirmado e o mês bater com o mês de
+// quitação previsto do participante, marca o participante inteiro como quitado; se um pagamento
+// que tinha disparado essa quitação for revertido (erro de digitação/clique do admin), desfaz.
 app.put('/api/bolao-parcelado-pagamentos/:id/status', async (req, res) => {
   const { status } = req.body;
   if (!['pendente', 'confirmado', 'rejeitado'].includes(status)) {
@@ -769,13 +770,21 @@ app.put('/api/bolao-parcelado-pagamentos/:id/status', async (req, res) => {
       `UPDATE bolao_parcelado_pagamentos SET status=$1, confirmado_em=${confirmadoEm} WHERE id=$2 RETURNING participante_id, mes`,
       [status, req.params.id]
     );
-    if (status === 'confirmado' && rows.length) {
+    if (rows.length) {
       const { participante_id, mes } = rows[0];
-      await pool.query(
-        `UPDATE bolao_parcelado_participantes SET quitado=true, quitado_em=NOW()
-         WHERE id=$1 AND mes_quitacao_previsto=$2`,
-        [participante_id, mes]
-      );
+      if (status === 'confirmado') {
+        await pool.query(
+          `UPDATE bolao_parcelado_participantes SET quitado=true, quitado_em=NOW()
+           WHERE id=$1 AND mes_quitacao_previsto=$2`,
+          [participante_id, mes]
+        );
+      } else {
+        await pool.query(
+          `UPDATE bolao_parcelado_participantes SET quitado=false, quitado_em=NULL
+           WHERE id=$1 AND mes_quitacao_previsto=$2 AND quitado=true`,
+          [participante_id, mes]
+        );
+      }
     }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
