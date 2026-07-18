@@ -324,6 +324,18 @@ body {
 .bac-sub   { font-size: .78rem; margin-top: 2px; }
 .bac-seta  { font-size: 1.5rem; opacity: .75; }
 
+/* ---- CARD BOLÃO ANUAL (Home — apostador, admin e dev) ---- */
+.anual-home-card {
+  display: flex; align-items: center; gap: 14px;
+  background: linear-gradient(135deg, #2e2a6e, #171533); color: #fff;
+  border: 1px solid #4a44b0;
+  border-radius: var(--radius); padding: 16px; cursor: pointer;
+  margin: 14px 0; transition: transform .15s, box-shadow .15s;
+  box-shadow: 0 4px 18px rgba(46,42,110,.45);
+}
+.anual-home-card:hover { transform: scale(1.02); box-shadow: 0 6px 24px rgba(46,42,110,.6); }
+.anual-home-card .bac-sub { opacity: .85; }
+
 .minha-participacao, .sem-participacao {
   border-radius: var(--rsm); padding: 11px 14px; font-size: .8rem;
   margin-bottom: 18px; cursor: pointer;

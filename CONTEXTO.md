@@ -383,6 +383,30 @@ tinha pago antes de virar cadastro digital.
   (não fui eu) — ainda sem participantes na última checagem (11/07/2026). Essas duas features
   facilitam ele popular esse bolão sem digitar cada apostador manualmente.
 
+## Card "Bolão Anual" na Home + planilha sempre visível (18/07/2026)
+
+Pedido do usuário: a estrutura do Bolão Anual precisa estar visível na primeira página pra todos os
+perfis (apostador, admin e dev), com a planilha aparecendo mesmo vazia ("aguardando dados dos
+grupos de WhatsApp"), e um card faixa de lado a lado (mesma estrutura do card Bolões Ativos)
+posicionado **entre os números dos últimos 3 concursos e o Palpiteiro**.
+
+- **Card `anual-home-card`** (CSS próprio, degradê azul-escuro #2e2a6e→#171533): renderizado por
+  `R._anualHomeCard()`.
+  - Home do apostador (`_hRender`): entre a seção "🧊 Menos frequentes" e o botão do Palpiteiro.
+    Toque → rola suave até a planilha na própria Home (`_anualCardClick`).
+  - Home do admin/dev (`_homeAdmin`): logo após a grade de loterias. Toque → `R.ir('anual')`
+    (gestão completa: cadastrar bolão, incluir/remover participante, configurar pagamentos,
+    importar do grupo).
+  - Subtítulo dinâmico: admin vê contagem de bolões/participantes; apostador participante vê
+    "X/N meses pagos"; apostador sem participação vê "Planilha aguardando dados dos grupos de
+    WhatsApp".
+- **Planilha sempre visível**: `_renderHomeAnual` deixou de esconder o slot quando o cliente não
+  participa de nenhum bolão — agora renderiza a planilha vazia (12 meses) via
+  `R._anualTabelaVazia()`, aguardando os dados dos grupos.
+- **Tela de gestão (`_anual`)**: estado vazio trocado pela mesma planilha vazia com botões
+  "📅 Cadastrar bolão" e "📱 Cadastrar grupos de WhatsApp" (→ tela WhatsApp); header ganhou o
+  atalho "📱 Grupos WhatsApp".
+
 ## Funcionalidades implementadas
 
 - Splash screen + login (bcrypt + JWT 24h, senha em texto puro); cliente entra com **nome completo +

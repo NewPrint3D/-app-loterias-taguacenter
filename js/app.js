@@ -782,7 +782,8 @@ const R = {
             <div class="lt-nome">${lt.nome}</div>
           </div>`;
         }).join('')}
-      </div>`;
+      </div>
+      ${R._anualHomeCard()}`;
 
     await Promise.allSettled(Object.values(LOTERIAS).map(async lt=>{
       const {dados}=await API.ultimos3(lt.id);
@@ -859,15 +860,53 @@ const R = {
     R._renderHomeAnual();
   },
 
+  // Card faixa "Bolão Anual" — vai de um lado a outro do app (mesma estrutura do card Bolões
+  // Ativos), exibido entre os números dos últimos concursos e o Palpiteiro. Aparece pra TODOS os
+  // perfis: apostador acompanha os pagamentos do grupo e sobe comprovante (transparência);
+  // admin/dev toca e cai direto na gestão (cadastrar bolão, incluir/remover participante,
+  // configurar pagamentos, cadastrar grupos de WhatsApp).
+  _anualHomeCard() {
+    const bs = DB.boloesParcelados.list();
+    let sub;
+    if (AUTH.isAdmin()) {
+      const parts = bs.reduce((s,b)=>s+(b.participantes||[]).length,0);
+      sub = bs.length
+        ? `${bs.length} bolão${bs.length>1?'ões':''} · ${parts} participante${parts!==1?'s':''} — toque para gerenciar`
+        : 'Planilha vazia — toque para cadastrar bolões e grupos de WhatsApp';
+    } else {
+      const info = DB.boloesParcelados.minhaParticipacao();
+      if (info) {
+        const pagos = (info.participante.pagamentos||[]).filter(pg=>pg.status==='confirmado').length;
+        sub = `${info.bolao.nome}: ${pagos}/${info.bolao.duracao_meses} meses pagos — toque para acompanhar`;
+      } else {
+        sub = 'Planilha aguardando dados dos grupos de WhatsApp';
+      }
+    }
+    return `
+      <div class="anual-home-card" onclick="R._anualCardClick()">
+        <div class="bac-emoji">📅</div>
+        <div class="bac-info">
+          <div class="bac-titulo">Bolão Anual</div>
+          <div class="bac-sub">${sub}</div>
+        </div>
+        <span class="bac-seta">›</span>
+      </div>`;
+  },
+  _anualCardClick() {
+    if (AUTH.isAdmin()) { R.ir('anual'); return; }
+    // Apostador: leva até a planilha de acompanhamento na própria Home
+    $('home-anual-slot')?.scrollIntoView({ behavior:'smooth', block:'start' });
+  },
+
   // Planilha do Bolão Anual embutida na própria Home (entre a grade de loterias e os últimos
   // concursos, antes do Palpiteiro) — todos os participantes veem a mesma planilha (transparência
-  // do grupo); só aparece se o telefone do cliente bater com algum participante de bolão
-  // parcelado (evita poluir a Home de quem não participa de nenhum). Tocar no próprio nome abre
-  // as ações (anexar comprovante / declarar quitação).
+  // do grupo). Sempre visível: se o cliente ainda não participa de nenhum bolão parcelado, a
+  // planilha aparece vazia, aguardando os dados virem dos grupos de WhatsApp. Tocar no próprio
+  // nome abre as ações (anexar comprovante / declarar quitação).
   _renderHomeAnual() {
     const slot = $('home-anual-slot'); if (!slot) return;
     const info = DB.boloesParcelados.minhaParticipacao();
-    if (!info) { slot.innerHTML = ''; return; }
+    if (!info) { slot.innerHTML = R._anualTabelaVazia(); return; }
     const { bolao:b, participante:p } = info;
     const parts = b.participantes||[];
     const meses = Array.from({length:b.duracao_meses}, (_,i)=>i+1);
@@ -883,6 +922,24 @@ const R = {
                 ${meses.map(m=>{ const c=R._anualCelula(b,pp,m); return `<td class="${c.cls}" title="${c.titulo}">${c.icon}</td>`; }).join('')}
               </tr>`).join('')}
           </tbody>
+        </table>
+      </div>`;
+  },
+  // Planilha vazia (estrutura de 12 meses) — mostrada enquanto não chegam os dados dos grupos de
+  // WhatsApp, tanto na Home do apostador quanto na tela de gestão do admin/dev.
+  _anualTabelaVazia(botoesAdmin) {
+    return `
+      <div class="sectt mb8 mt16">📅 Bolão Anual — acompanhamento</div>
+      <div class="anual-tbl-wrap mb16">
+        <table class="anual-tbl">
+          <thead><tr><th>Participante</th>${MESES_NOMES.map(m=>`<th>${m.slice(0,3)}</th>`).join('')}</tr></thead>
+          <tbody><tr><td colspan="13" class="tc muted" style="padding:18px 10px;white-space:normal">
+            ⏳ Planilha vazia — aguardando dados dos grupos de WhatsApp.
+            ${botoesAdmin ? `<div class="mt8">
+              <button class="btn btn-p btn-sm" onclick="R._mNovoAnual()">📅 Cadastrar bolão</button>
+              <button class="btn btn-o btn-sm" onclick="R.ir('whatsapp')">📱 Cadastrar grupos de WhatsApp</button>
+            </div>` : ''}
+          </td></tr></tbody>
         </table>
       </div>`;
   },
@@ -1059,6 +1116,8 @@ const R = {
             </div>`).join('')}
         </div>
       </div>
+
+      ${R._anualHomeCard()}
 
       <button class="btn btn-p btn-f mt4 mb4" onclick="R._iaClick('${ltId}')">
         <img src="img/ze-loteca.png" class="ze-btn-ico" alt="Palpiteiro"> Quer que o Palpiteiro te ajude a escolher os números?
@@ -1948,14 +2007,16 @@ const R = {
     $('h-title').textContent='Bolão Anual';
     const lista = DB.boloesParcelados.list();
     $('view-anual').innerHTML = `
-      <div class="fxb mb12">
+      <div class="fxb mb12" style="flex-wrap:wrap;gap:6px">
         <div class="sectt">Bolões parcelados (${lista.length})</div>
-        <button class="btn btn-p btn-sm" onclick="R._mNovoAnual()">+ Novo</button>
+        <div class="fx" style="gap:6px">
+          <button class="btn btn-o btn-sm" onclick="R.ir('whatsapp')">📱 Grupos WhatsApp</button>
+          <button class="btn btn-p btn-sm" onclick="R._mNovoAnual()">+ Novo</button>
+        </div>
       </div>
+      ${!lista.length ? R._anualTabelaVazia(true) : `
       <div class="card">
-        ${!lista.length
-          ? '<div class="empty"><div class="ei">📅</div><p>Nenhum bolão parcelado cadastrado ainda.</p></div>'
-          : lista.map(b=>{
+        ${lista.map(b=>{
             const n=(b.participantes||[]).length;
             return `<div class="user-card" style="cursor:pointer" onclick="R._irAnualDet('${b.id}')">
               <div class="user-avatar" style="background:var(--gold)">📅</div>
@@ -1966,7 +2027,7 @@ const R = {
               <div class="user-acts"><button class="btn btn-d btn-sm" onclick="event.stopPropagation();R._delAnual('${b.id}')">✕</button></div>
             </div>`;
           }).join('')}
-      </div>`;
+      </div>`}`;
   },
   _mNovoAnual() {
     MODAL.open(`
