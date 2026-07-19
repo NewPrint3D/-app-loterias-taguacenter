@@ -1434,19 +1434,32 @@ app.get('/api/wpp/status', (req, res) => {
   res.json({ status: botStatus, qr: botQr });
 });
 
+// Página do QR com atualização automática: o QR do WhatsApp rotaciona a cada ~20-60s e cada
+// código só vale UMA leitura — a página busca o status a cada 5s e troca o QR sozinha, então o
+// código na tela está sempre fresco (não precisa recarregar nem clicar em nada).
 app.get('/api/wpp/qr', (req, res) => {
-  if (!botQr) {
-    return res.send(`<html><body style="background:#0d1117;color:#fff;font-family:sans-serif;text-align:center;padding:40px">
-      <h2>Status: ${botStatus}</h2>
-      <p>QR ainda não disponível. Aguarde e <a href="/api/wpp/qr" style="color:#4ade80">recarregue</a>.</p>
-    </body></html>`);
-  }
-  res.send(`<html><body style="background:#0d1117;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0">
-    <p style="color:#fff;font-family:sans-serif;margin-bottom:16px;font-size:1.1rem">📱 WhatsApp → Dispositivos vinculados → Vincular dispositivo</p>
-    <img src="${botQr}" style="width:280px;height:280px;border-radius:12px;background:#fff;padding:8px">
-    <p style="color:#888;font-family:sans-serif;font-size:12px;margin-top:16px">
-      Status: ${botStatus} · <a href="/api/wpp/qr" style="color:#4ade80">Atualizar QR</a>
-    </p>
+  res.send(`<html><body style="background:#0d1117;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;font-family:sans-serif">
+    <p style="color:#fff;margin-bottom:16px;font-size:1.1rem;text-align:center;padding:0 16px">📱 WhatsApp → Dispositivos vinculados → Vincular dispositivo<br>
+    <span style="font-size:.8rem;color:#888">Aponte a câmera direto pra ESTA tela (não pra foto) — o QR se renova sozinho.</span></p>
+    <img id="qr" src="${botQr||''}" style="width:280px;height:280px;border-radius:12px;background:#fff;padding:8px;${botQr?'':'display:none'}">
+    <h2 id="st" style="color:#fff;margin-top:16px;font-size:1rem">Status: ${botStatus}</h2>
+    <script>
+      setInterval(async () => {
+        try {
+          const d = await (await fetch('/api/wpp/status')).json();
+          const img = document.getElementById('qr'), st = document.getElementById('st');
+          if (d.status === 'conectado') {
+            img.style.display = 'none';
+            st.textContent = '✅ Conectado! Pode fechar esta página.';
+            st.style.color = '#4ade80';
+            return;
+          }
+          st.textContent = 'Status: ' + d.status;
+          if (d.qr) { img.src = d.qr; img.style.display = ''; }
+          else { img.style.display = 'none'; }
+        } catch {}
+      }, 5000);
+    </script>
   </body></html>`);
 });
 
