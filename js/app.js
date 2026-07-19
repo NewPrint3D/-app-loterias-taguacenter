@@ -528,6 +528,7 @@ const AUTH = {
     R._verificarPremios();
     R._verificarPremiacaoCliente();
     RELAY.verificarPendentes();
+    BADGES.atualizar();
     AUTH._iniciarPollingResultados();
   },
 
@@ -543,6 +544,7 @@ const AUTH = {
       await carregarDados();
       R._verificarPremios();
       RELAY.verificarPendentes();
+      BADGES.atualizar();
     }, 60000);
   },
 
@@ -769,6 +771,58 @@ const ZE = {
 const MODAL = {
   open(html) { $('m-body').innerHTML=html; $('modal').hidden=false; },
   close()    { $('modal').hidden=true; $('m-body').innerHTML=''; },
+};
+
+// =============================================
+// BADGES — notificações de pendências pro admin/dev (estilo WhatsApp)
+// Conta o que está esperando ação e mostra a bolinha vermelha nos ícones:
+//   Grupos  → comprovantes de bolões tradicionais aguardando aprovação
+//   Config. → comprovantes do Cotas ao Vivo + comprovantes do Bolão Anual + mensagens não lidas
+// Atualizado no login, a cada 60s (polling do admin) e na hora em que uma pendência é resolvida.
+// =============================================
+const BADGES = {
+  _dados: { grupos:0, cotasVivo:0, anualPend:0, msgs:0, config:0 },
+
+  async atualizar() {
+    if (!AUTH.isAdmin()) return;
+    const grupos = (S.cache.pags||[]).filter(p=>p.status==='pendente').length;
+    let cotasVivo = 0;
+    try {
+      const lotes = await _api.get('/api/lotes');
+      if (Array.isArray(lotes)) cotasVivo = lotes.reduce((s,l)=>s+(l.cotas||[]).filter(c=>c.status==='comprovante').length,0);
+    } catch {}
+    let anualPend = 0;
+    (S.cache.boloesParcelados||[]).forEach(b=>(b.participantes||[]).forEach(p=>(p.pagamentos||[]).forEach(pg=>{ if (pg.status==='pendente') anualPend++; })));
+    let msgs = 0;
+    try { msgs = (await DB.anualMensagens.todas()).filter(m=>!m.lida).length; } catch {}
+    BADGES._dados = { grupos, cotasVivo, anualPend, msgs, config: cotasVivo+anualPend+msgs };
+    BADGES._aplicar();
+  },
+
+  _aplicar() {
+    BADGES._setNav('grupos', BADGES._dados.grupos);
+    BADGES._setNav('admin',  BADGES._dados.config);
+    // Cards do menu Config. (se a tela estiver aberta)
+    BADGES._setCard('amenu-not-lotes', BADGES._dados.cotasVivo);
+    BADGES._setCard('amenu-not-anual', BADGES._dados.anualPend + BADGES._dados.msgs);
+    BADGES._setCard('amenu-not-pags',  BADGES._dados.grupos);
+  },
+  _setNav(v, n) {
+    document.querySelectorAll(`#nav-admin .nb[data-v="${v}"]`).forEach(b=>{
+      let el = b.querySelector('.nav-notif');
+      if (!n) { el?.remove(); return; }
+      if (!el) { el = document.createElement('span'); el.className='nav-notif'; b.appendChild(el); }
+      el.textContent = n>99?'99+':n;
+    });
+  },
+  _setCard(id, n) {
+    const el = $(id); if (!el) return;
+    el.textContent = n>99?'99+':(n||'');
+    el.style.display = n?'flex':'none';
+  },
+  limpar() {
+    document.querySelectorAll('#nav-admin .nav-notif').forEach(e=>e.remove());
+  },
 };
 
 // =============================================
@@ -1107,10 +1161,12 @@ const R = {
       ? '📨 Resposta enviada no WhatsApp do apostador e registrada no app!'
       : '📨 Resposta registrada no app — bot desconectado, WhatsApp não foi enviado.', data.whatsapp?'ok':'err');
     R._carregarMsgsAnualDet(bolaoId);
+    BADGES.atualizar();
   },
   async _marcarMsgLida(id, bolaoId) {
     await DB.anualMensagens.marcarLida(id);
     R._carregarMsgsAnualDet(bolaoId);
+    BADGES.atualizar();
   },
 
   _mMeuAnualAcao() {
@@ -1947,15 +2003,17 @@ const R = {
       <div class="amenu">
         <div class="amenu-c" onclick="R.ir('whatsapp')"><span class="amenu-i">${WPP_SVG(38)}</span><div class="amenu-n">WhatsApp</div></div>
         <div class="amenu-c" onclick="R.ir('stats')"><span class="amenu-i">📊</span><div class="amenu-n">Estatísticas</div></div>
-        <div class="amenu-c" onclick="R.ir('pagamentos')"><span class="amenu-i">💳</span><div class="amenu-n">Pagamentos</div></div>
-        <div class="amenu-c" style="border-color:var(--gold)" onclick="R.ir('lotes')"><span class="amenu-i">🧾</span><div class="amenu-n">Cotas ao Vivo</div></div>
+        <div class="amenu-c" onclick="R.ir('pagamentos')"><span id="amenu-not-pags" class="amenu-notif" style="display:none"></span><span class="amenu-i">💳</span><div class="amenu-n">Pagamentos</div></div>
+        <div class="amenu-c" style="border-color:var(--gold)" onclick="R.ir('lotes')"><span id="amenu-not-lotes" class="amenu-notif" style="display:none"></span><span class="amenu-i">🧾</span><div class="amenu-n">Cotas ao Vivo</div></div>
         <div class="amenu-c" onclick="R.ir('boloes')"><span class="amenu-i">🎲</span><div class="amenu-n">Bolões</div></div>
         <div class="amenu-c" onclick="R.ir('usuarios')"><span class="amenu-i">👥</span><div class="amenu-n">Usuários <span style="font-size:.65rem;background:var(--primary);color:#000;border-radius:10px;padding:1px 5px;margin-left:2px">${qtUsr}</span></div></div>
         <div class="amenu-c" onclick="R.ir('premiacao')"><span class="amenu-i">🏆</span><div class="amenu-n">Premiação</div></div>
-        <div class="amenu-c" onclick="R.ir('anual')"><span class="amenu-i">📅</span><div class="amenu-n">Bolão Anual</div></div>
+        <div class="amenu-c" onclick="R.ir('anual')"><span id="amenu-not-anual" class="amenu-notif" style="display:none"></span><span class="amenu-i">📅</span><div class="amenu-n">Bolão Anual</div></div>
         ${isdev?`<div class="amenu-c" style="border-color:var(--red)" onclick="R.ir('controle')"><span class="amenu-i">🔒</span><div class="amenu-n" style="color:var(--red)">Controle Dev</div></div>`:''}
       </div>
       ${TEMA.renderSeletor()}`;
+    BADGES._aplicar();   // preenche os números dos cards com o último valor conhecido
+    BADGES.atualizar();  // e busca os valores frescos em seguida
   },
 
   // ---- USUÁRIOS (admin) — integrado com bolões e WhatsApp ----
@@ -2535,6 +2593,7 @@ const R = {
     DB.boloesParcelados.confirmarPagamento(id, 'rejeitado', motivo);
     MODAL.close();
     R._renderAnualDet();
+    BADGES.atualizar();
     TOAST.show(motivo
       ? '🚫 Comprovante ignorado — apostador avisado no WhatsApp.'
       : '🚫 Comprovante ignorado (sem mensagem ao apostador).', 'err');
@@ -2543,6 +2602,7 @@ const R = {
     DB.boloesParcelados.confirmarPagamento(id, status);
     MODAL.close();
     R._renderAnualDet();
+    BADGES.atualizar();
     const msgs = { confirmado:'✓ Pagamento confirmado!', pendente:'↩️ Revertido para pendente.' };
     TOAST.show(msgs[status], 'ok');
   },
@@ -3069,8 +3129,8 @@ const R = {
     }
     $('view-pagamentos').innerHTML=`<div class="sectt mb4">Comprovantes por grupo</div>${html}`;
   },
-  _aPag(id){ DB.pags.setStatus(id,'aprovado'); R._pagamentos(); },
-  _rPag(id){ DB.pags.setStatus(id,'rejeitado'); R._pagamentos(); },
+  _aPag(id){ DB.pags.setStatus(id,'aprovado'); R._pagamentos(); BADGES.atualizar(); },
+  _rPag(id){ DB.pags.setStatus(id,'rejeitado'); R._pagamentos(); BADGES.atualizar(); },
 
   _mComp(bid) {
     const b=DB.boloes.get(bid);
@@ -3308,7 +3368,12 @@ const BOT = {
     BOT._timer = setInterval(async () => {
       const d = await BOT.verificarStatus();
       BOT._atualizarUI(d);
-      if (d.status === 'conectado') BOT._pararPolling();
+      if (d.status === 'conectado') {
+        BOT._pararPolling();
+        // Remonta o painel inteiro: a seção "Vincular Grupos" foi construída ANTES da conexão
+        // (dropdowns vazios) — só re-renderizando ela busca os grupos do bot recém-conectado.
+        if (S.tela === 'controle') BOT.renderPainel().then(h => { const el = $('bot-wrap'); if (el) el.innerHTML = h; });
+      }
     }, 3500);
   },
 
@@ -3996,14 +4061,14 @@ const COTAS = {
     if (!c || !c.comprovante) { TOAST.show('Sem comprovante anexado.', 'err'); return; }
     MODAL.open('<div class="sectt mb8">Comprovante — ' + this._esc(c.nome) + ' (cota #' + c.numero + ')</div><img src="' + c.comprovante + '" style="width:100%;border-radius:10px" alt="comprovante">');
   },
-  async confirmar(id) { await _api.put('/api/cotas/' + id + '/confirmar'); await this._carregar(); this._renderAdmin(); TOAST.show('✅ Pagamento confirmado.', 'ok'); },
+  async confirmar(id) { await _api.put('/api/cotas/' + id + '/confirmar'); await this._carregar(); this._renderAdmin(); BADGES.atualizar(); TOAST.show('✅ Pagamento confirmado.', 'ok'); },
   async rejeitar(id) {
     if (!confirm('Recusar esse comprovante? O apostador verá "pendente — entre em contato com o administrador" e poderá reenviar outro.')) return;
     await _api.put('/api/cotas/' + id + '/rejeitar');
-    await this._carregar(); this._renderAdmin();
+    await this._carregar(); this._renderAdmin(); BADGES.atualizar();
     TOAST.show('❌ Comprovante recusado — a cota continua com o apostador até ele reenviar.', 'ok');
   },
-  async liberar(id) { if (!confirm('Liberar essa cota de volta pra venda?')) return; await _api.put('/api/cotas/' + id + '/liberar'); await this._carregar(); this._renderAdmin(); },
+  async liberar(id) { if (!confirm('Liberar essa cota de volta pra venda?')) return; await _api.put('/api/cotas/' + id + '/liberar'); await this._carregar(); this._renderAdmin(); BADGES.atualizar(); },
   async encerrar(id) { if (!confirm('Encerrar o lote agora?')) return; await _api.put('/api/lotes/' + id + '/encerrar'); await this._carregar(); this._renderAdmin(); },
   async excluir(id) { if (!confirm('Excluir o lote e todas as cotas? Não dá pra desfazer.')) return; await _api.del('/api/lotes/' + id); await this._carregar(); this._renderAdmin(); },
 
@@ -4202,6 +4267,7 @@ const DEV = {
     S.user = user;
     S.stack = [];
     AUTH._aplicarPerfilUI();
+    BADGES.atualizar(); // sim como admin mantém os badges; como cliente, o guard interno ignora
     const b=$('sim-badge');
     b.hidden=false;
     b.textContent=`🧪 Testando como ${user.role==='admin'?'Admin':'Apostador'} — toque p/ voltar ao Dev`;
@@ -4214,6 +4280,7 @@ const DEV = {
     S.stack = [];
     $('sim-badge').hidden = true;
     AUTH._aplicarPerfilUI();
+    BADGES.atualizar();
     R.ir('controle');
     TOAST.show('🔒 De volta ao perfil Desenvolvedor.', 'ok');
   },
