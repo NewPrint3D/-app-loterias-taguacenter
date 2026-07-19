@@ -486,6 +486,8 @@ const AUTH = {
     _filaReprocessar(); // reenvia o que ficou pendente de uma sessão anterior offline
     if (err) { err.hidden=true; err.style.color=''; }
 
+    // Modo manutenção: SÓ o dev continua entrando para ajustar o app — apostador E admin veem a
+    // tela de manutenção até o dev colocar o app de volta no ar.
     if (S.user.role !== 'dev') {
       const c = DB.ctrl.get();
       if (c.bloqueado) {
@@ -3001,15 +3003,19 @@ const R = {
         <div class="dev-row"><span class="dev-lbl">Cliente</span><span>${c.cliente}</span></div>
         <div class="dev-row"><span class="dev-lbl">Código</span><span>${c.licenca}</span></div>
         <div class="dev-row"><span class="dev-lbl">Validade</span><span>${c.validade}</span></div>
-        <div class="dev-row"><span class="dev-lbl">Status</span><span style="color:${c.bloqueado?'var(--red)':'var(--primary)'}">${c.bloqueado?'🔴 BLOQUEADO':'🟢 ATIVO'}</span></div>
+        <div class="dev-row"><span class="dev-lbl">Status</span><span style="color:${c.bloqueado?'var(--red)':'var(--primary)'}">${c.bloqueado?'🛠️ EM MANUTENÇÃO':'🟢 NO AR'}</span></div>
       </div>
       <div class="dev-panel">
-        <h3>🔒 Controle de Acesso</h3>
+        <h3>🛠️ Modo Manutenção</h3>
+        <p class="txs muted mb8">Em manutenção, <strong>só você (dev) opera o app</strong> —
+        apostadores e admin veem a tela de manutenção até você colocar o app de volta no ar.
+        Você continua com acesso total nos dois modos: dá pra ajustar tudo com o app online ou
+        em manutenção.</p>
         <div class="dev-row">
-          <span class="dev-lbl">Bloquear App</span>
+          <span class="dev-lbl">Tela de manutenção (apostadores e admin)</span>
           <label class="sw"><input type="checkbox" ${c.bloqueado?'checked':''} onchange="DEV.block(this.checked)"><span class="sl2"></span></label>
         </div>
-        <div class="fg mt12"><label>Mensagem de bloqueio</label><textarea id="dev-msg" rows="2">${c.msg||'Sistema temporariamente indisponível. Entre em contato com o suporte.'}</textarea></div>
+        <div class="fg mt12"><label>Mensagem da tela de manutenção</label><textarea id="dev-msg" rows="2">${c.msg||'Sistema temporariamente indisponível. Entre em contato com o suporte.'}</textarea></div>
         <button class="btn btn-p btn-sm" onclick="DEV.saveMsg()">Salvar mensagem</button>
       </div>
       <div class="dev-panel">
@@ -3972,9 +3978,13 @@ const DEV = {
   },
   block(v) {
     const c=DB.ctrl.get(); c.bloqueado=v; DB.ctrl.set(c);
-    DB.ctrl.log(`App ${v?'BLOQUEADO':'desbloqueado'}`);
-    $('bloqueio').hidden=!v;
-    if(v){$('bl-msg').textContent=c.msg||'Sistema temporariamente indisponível.';}
+    DB.ctrl.log(`App ${v?'em MANUTENÇÃO (só o dev opera)':'de volta ao ar'}`);
+    // Quem liga a manutenção é o dev — ele continua dentro do app, ajustando o que precisar;
+    // a tela de manutenção aparece para apostadores E admin no próximo acesso.
+    TOAST.show(v
+      ? '🛠️ Manutenção LIGADA — apostadores e admin veem a tela de manutenção; só você (dev) segue operando.'
+      : '🟢 App de volta ao ar para todo mundo (apostadores e admin).', 'ok');
+    R._controle();
   },
   saveMsg() {
     const c=DB.ctrl.get(); c.msg=$('dev-msg')?.value?.trim()||''; DB.ctrl.set(c); alert('Mensagem salva!');
@@ -4039,6 +4049,7 @@ const DEV = {
   },
   check() {
     const c=DB.ctrl.get();
+    if(S.user?.role==='dev') return false; // só o dev nunca fica preso na manutenção
     if(c.bloqueado && !S.cache.boloes.length){
       c.bloqueado=false; DB.ctrl.set(c); return false;
     }

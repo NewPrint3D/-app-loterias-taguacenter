@@ -407,6 +407,22 @@ posicionado **entre os números dos últimos 3 concursos e o Palpiteiro**.
   "📅 Cadastrar bolão" e "📱 Cadastrar grupos de WhatsApp" (→ tela WhatsApp); header ganhou o
   atalho "📱 Grupos WhatsApp".
 
+## Modo Manutenção — só o dev opera (18/07/2026)
+
+Pedido do usuário: enquanto ele (desenvolvedor) ajusta o app, poder trabalhar tanto com o app
+online quanto em manutenção — e, em manutenção, **só o dev opera**: apostador E admin veem a tela
+de manutenção até o dev colocar o app de volta no ar.
+
+- **Antes**: o toggle "Bloquear App" do Controle Dev derrubava todo mundo, inclusive quem ligou
+  (o próprio dev caía na tela de manutenção e precisava dos 7 toques no 🔒 + senha pra voltar).
+- **Agora**:
+  - `AUTH._start` e `DEV.check`: em manutenção, só o role `dev` entra; apostador e admin caem na
+    tela de manutenção. App no ar = todo mundo entra normal.
+  - `DEV.block`: ligar/desligar não expulsa mais o dev — mostra toast de confirmação e
+    re-renderiza o Controle Dev (status "🛠️ EM MANUTENÇÃO" / "🟢 NO AR").
+  - Painel renomeado pra "🛠️ Modo Manutenção", com texto explicando a regra; a saída de
+    emergência pela tela de manutenção (7 toques no 🔒 + senha dev) continua existindo.
+
 ## Funcionalidades implementadas
 
 - Splash screen + login (bcrypt + JWT 24h, senha em texto puro); cliente entra com **nome completo +
