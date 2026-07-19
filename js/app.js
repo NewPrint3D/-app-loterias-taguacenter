@@ -897,7 +897,7 @@ const R = {
       const info = DB.boloesParcelados.minhaParticipacao();
       if (info) {
         const pagos = (info.participante.pagamentos||[]).filter(pg=>pg.status==='confirmado').length;
-        sub = `${info.bolao.nome}: ${pagos}/${info.bolao.duracao_meses} meses pagos — toque para acompanhar`;
+        sub = `${info.bolao.nome}: ${pagos}/${info.bolao.duracao_meses} meses pagos — toque para enviar comprovante`;
       } else {
         sub = 'Planilha aguardando dados dos grupos de WhatsApp';
       }
@@ -914,7 +914,12 @@ const R = {
   },
   _anualCardClick() {
     if (AUTH.isAdmin()) { R.ir('anual'); return; }
-    // Apostador: leva até a planilha de acompanhamento na própria Home
+    // Apostador participante: abre direto as ações dele (enviar comprovante / declarar quitação).
+    // Antes só rolava até a planilha — como o card fica logo abaixo dela, parecia que o toque
+    // "não fazia nada" (a tela só se mexia um pouco).
+    const info = DB.boloesParcelados.minhaParticipacao();
+    if (info) { R._mMeuAnualAcao(); return; }
+    // Não participante: leva até a planilha de acompanhamento na própria Home
     $('home-anual-slot')?.scrollIntoView({ behavior:'smooth', block:'start' });
   },
 
