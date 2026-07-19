@@ -56,6 +56,7 @@ function ehRotaEscritaPublica(path) {
   if (/^\/api\/cotas\/[^/]+\/(reservar|comprovante)$/.test(path)) return true;
   if (/^\/api\/premiacoes\/[^/]+\/confirmar$/.test(path)) return true;
   if (/^\/api\/bolao-parcelado-participantes\/[^/]+\/quitacao$/.test(path)) return true;
+  if (path === '/api/bolao-parcelado-mensagens') return true; // apostador sem token envia mensagem ao admin
   return false;
 }
 
@@ -787,6 +788,45 @@ app.post('/api/bolao-parcelado-pagamentos/lote', async (req, res) => {
 });
 
 // Admin confirma/rejeita/reverte um comprovante mensal. Se confirmado e o mês bater com o mês de
+// ---- MENSAGENS PRIVADAS apostador → admin (Bolão Anual) ----
+// PÚBLICA (em ehRotaEscritaPublica) — apostador sem token envia sugestão/reclamação/dúvida.
+app.post('/api/bolao-parcelado-mensagens', async (req, res) => {
+  const { id, bolao_parcelado_id, participante_id, nome, fone, mensagem } = req.body || {};
+  const texto = String(mensagem || '').trim().slice(0, 1000);
+  if (!id || !bolao_parcelado_id || !texto) return res.status(400).json({ ok: false, error: 'Escreva a mensagem.' });
+  try {
+    await pool.query(
+      `INSERT INTO bolao_parcelado_mensagens(id,bolao_parcelado_id,participante_id,nome,fone,mensagem,lida,criado)
+       VALUES($1,$2,$3,$4,$5,$6,false,NOW()) ON CONFLICT(id) DO NOTHING`,
+      [id, bolao_parcelado_id, participante_id || null, String(nome||'').slice(0,60), normalizarFoneServidor(fone||''), texto]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Com ?fone= devolve só as mensagens daquele telefone (o apostador vê as próprias);
+// sem filtro exige token de admin/dev — a caixa de entrada completa é privada.
+app.get('/api/bolao-parcelado-mensagens', async (req, res) => {
+  try {
+    const fone = normalizarFoneServidor(req.query.fone || '');
+    if (fone) {
+      const r = await pool.query('SELECT * FROM bolao_parcelado_mensagens WHERE fone=$1 ORDER BY criado DESC', [fone]);
+      return res.json(r.rows);
+    }
+    const auth = req.headers.authorization || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    try { jwt.verify(token, JWT_SECRET); } catch { return res.status(401).json({ ok: false, error: 'Sessão expirada. Faça login novamente.' }); }
+    const r = await pool.query('SELECT * FROM bolao_parcelado_mensagens ORDER BY criado DESC');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Admin marca a mensagem como lida (protegida pelo middleware por ser PUT).
+app.put('/api/bolao-parcelado-mensagens/:id/lida', async (req, res) => {
+  try { await pool.query('UPDATE bolao_parcelado_mensagens SET lida=true WHERE id=$1', [req.params.id]); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // quitação previsto do participante, marca o participante inteiro como quitado; se um pagamento
 // que tinha disparado essa quitação for revertido (erro de digitação/clique do admin), desfaz.
 app.put('/api/bolao-parcelado-pagamentos/:id/status', async (req, res) => {
@@ -1043,6 +1083,18 @@ const _migracaoBoloesParcelados = (async () => {
     // Justificativa do admin ao ignorar/rejeitar um comprovante — enviada automaticamente pro
     // apostador via WhatsApp (ver rota PUT .../status).
     await pool.query(`ALTER TABLE bolao_parcelado_pagamentos ADD COLUMN IF NOT EXISTS motivo_rejeicao TEXT`);
+    // Mensagens privadas apostador → admin (sugestão/reclamação/dúvida do bolão anual)
+    await pool.query(`CREATE TABLE IF NOT EXISTS bolao_parcelado_mensagens (
+      id TEXT PRIMARY KEY,
+      bolao_parcelado_id TEXT REFERENCES boloes_parcelados(id) ON DELETE CASCADE,
+      participante_id TEXT,
+      nome TEXT DEFAULT '',
+      fone TEXT DEFAULT '',
+      mensagem TEXT NOT NULL,
+      lida BOOLEAN DEFAULT false,
+      criado TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bpmsg_bolao ON bolao_parcelado_mensagens(bolao_parcelado_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_bpp_bolao ON bolao_parcelado_participantes(bolao_parcelado_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_bppag_part ON bolao_parcelado_pagamentos(participante_id)`);
     console.log('Tabelas de Bolão Anual/Parcelado prontas.');

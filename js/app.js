@@ -289,6 +289,14 @@ const DB = {
     },
     del:  id  => { S.cache.premiacoes=S.cache.premiacoes.filter(p=>p.id!==id); _api.del('/api/premiacoes/'+id); },
   },
+  // Mensagens privadas apostador → admin (Bolão Anual). O apostador só enxerga as próprias
+  // (GET filtrado por telefone); a caixa completa exige token de admin/dev.
+  anualMensagens: {
+    enviar: m => _api.post('/api/bolao-parcelado-mensagens', m),
+    minhas: async () => (S.user?.fone ? (await _api.get('/api/bolao-parcelado-mensagens?fone=' + encodeURIComponent(S.user.fone))) || [] : []),
+    todas: async () => (await _api.get('/api/bolao-parcelado-mensagens')) || [],
+    marcarLida: id => _api.put('/api/bolao-parcelado-mensagens/' + id + '/lida'),
+  },
   boloesParcelados: {
     list: ()  => S.cache.boloesParcelados || [],
     get:  id  => (S.cache.boloesParcelados||[]).find(b=>b.id===id),
@@ -299,6 +307,15 @@ const DB = {
         if (p) return { bolao: b, participante: p };
       }
       return null;
+    },
+    // Todas as participações do apostador logado (pode estar em mais de um bolão)
+    minhasParticipacoes: () => {
+      const out = [];
+      for (const b of (S.cache.boloesParcelados||[])) {
+        const p = (b.participantes||[]).find(x => x.fone === S.user?.fone && x.ativo !== false);
+        if (p) out.push({ bolao: b, participante: p });
+      }
+      return out;
     },
     save: b   => { S.cache.boloesParcelados.unshift({ ...b, participantes:[] }); _api.post('/api/boloes-parcelados', b); },
     del:  id  => { S.cache.boloesParcelados=S.cache.boloesParcelados.filter(b=>b.id!==id); _api.del('/api/boloes-parcelados/'+id); },
@@ -894,10 +911,11 @@ const R = {
         ? `${bs.length} bolão${bs.length>1?'ões':''} · ${parts} participante${parts!==1?'s':''} — toque para gerenciar`
         : 'Planilha vazia — toque para cadastrar bolões e grupos de WhatsApp';
     } else {
-      const info = DB.boloesParcelados.minhaParticipacao();
-      if (info) {
-        const pagos = (info.participante.pagamentos||[]).filter(pg=>pg.status==='confirmado').length;
-        sub = `${info.bolao.nome}: ${pagos}/${info.bolao.duracao_meses} meses pagos — toque para enviar comprovante`;
+      const parts = DB.boloesParcelados.minhasParticipacoes();
+      if (parts.length) {
+        // Card personalizado: nome do apostador + bolão(ões) que ele participa
+        const nomes = parts.map(x=>x.bolao.nome).join(' · ');
+        sub = `${S.user.nome.split(' ')[0]} — ${nomes} — toque para abrir seu controle`;
       } else {
         sub = 'Planilha aguardando dados dos grupos de WhatsApp';
       }
@@ -914,11 +932,10 @@ const R = {
   },
   _anualCardClick() {
     if (AUTH.isAdmin()) { R.ir('anual'); return; }
-    // Apostador participante: abre direto as ações dele (enviar comprovante / declarar quitação).
-    // Antes só rolava até a planilha — como o card fica logo abaixo dela, parecia que o toque
-    // "não fazia nada" (a tela só se mexia um pouco).
-    const info = DB.boloesParcelados.minhaParticipacao();
-    if (info) { R._mMeuAnualAcao(); return; }
+    // Apostador participante: abre o controle pessoal dele (meses pagos/atraso, valores,
+    // comprovante e mensagens privadas com o admin).
+    const parts = DB.boloesParcelados.minhasParticipacoes();
+    if (parts.length) { R.ir('meuAnual'); return; }
     // Não participante: leva até a planilha de acompanhamento na própria Home
     $('home-anual-slot')?.scrollIntoView({ behavior:'smooth', block:'start' });
   },
@@ -995,6 +1012,89 @@ const R = {
       </div>`;
   },
   // Modal com as ações do próprio apostador — meses em aberto (anexar comprovante) e quitação.
+  // ---- MEU BOLÃO ANUAL — controle pessoal do apostador ----
+  // Meses pagos/em atraso, quanto já pagou, quanto falta, ações de comprovante/quitação e o
+  // canal privado de mensagens com o admin.
+  _meuAnual() {
+    const parts = DB.boloesParcelados.minhasParticipacoes();
+    if (!parts.length) { R.ir('home'); return; }
+    $('h-title').textContent = 'Meu Bolão Anual';
+    $('view-meuAnual').innerHTML = `
+      <div class="tc mb16">
+        <div style="font-size:2.4rem">📅</div>
+        <div style="font-size:1.1rem;font-weight:700;margin-top:4px">${COTAS._esc(S.user.nome)}</div>
+        <div class="muted txs mt4">📱 ${COTAS._esc(S.user.fone||'—')}</div>
+      </div>
+      ${parts.map(({bolao:b, participante:p}) => {
+        const pagosArr = (p.pagamentos||[]).filter(pg=>pg.status==='confirmado');
+        const pagoValor = pagosArr.reduce((s,pg)=>s+(pg.valor||b.valor_mensal||0),0);
+        const falta = p.quitado ? 0 : Math.max(0, (b.valor_total||0) - pagoValor);
+        const atraso = R._anualMesesEmAtraso(b, p);
+        return `
+        <div class="card">
+          <div class="sectt mb8">📅 ${b.nome}</div>
+          <div class="lr"><span class="muted">Meses pagos</span><span>${p.quitado?'💰 Quitado':`${pagosArr.length}/${b.duracao_meses}`}</span></div>
+          <div class="lr"><span class="muted">Meses em atraso</span><span style="color:${atraso.length?'var(--red)':'var(--primary)'}">${atraso.length?atraso.map(m=>MESES_NOMES[m-1]).join(', '):'nenhum ✓'}</span></div>
+          <div class="lr"><span class="muted">Já pago</span><span>${fmt$(pagoValor)}</span></div>
+          <div class="lr"><span class="muted">Falta até o fim do bolão</span><span>${fmt$(falta)}</span></div>
+          <button class="btn btn-p btn-f mt8" onclick="R._mMeuAnualAcao()">📎 Enviar comprovante / declarar quitação</button>
+        </div>`;
+      }).join('')}
+      <div class="card">
+        <div class="sectt mb8">📨 Fale com o administrador</div>
+        <p class="txs muted mb8">Sugestão, reclamação ou dúvida — só o administrador vê o que você escrever aqui.</p>
+        <div class="fg mb8"><textarea id="ma-msg" rows="3" placeholder="Escreva sua mensagem..."></textarea></div>
+        <button class="btn btn-p btn-f" onclick="R._enviarMsgAnual()">📨 Enviar mensagem</button>
+        <div id="ma-historico" class="mt12"><div class="loading"><div class="spinner"></div></div></div>
+      </div>`;
+    R._carregarMsgsMeuAnual();
+  },
+  async _carregarMsgsMeuAnual() {
+    const el = $('ma-historico'); if (!el) return;
+    const msgs = await DB.anualMensagens.minhas();
+    if (S.tela !== 'meuAnual') return;
+    el.innerHTML = msgs.length
+      ? `<div class="sectt mb8">Suas mensagens</div>` + msgs.map(m=>`
+        <div class="lote-card"><div class="txs">${COTAS._esc(m.mensagem)}</div>
+        <div class="txs muted mt4">${new Date(m.criado).toLocaleString('pt-BR')} · ${m.lida?'✓ lida pelo admin':'⏳ ainda não lida'}</div></div>`).join('')
+      : '<p class="txs muted">Nenhuma mensagem enviada ainda.</p>';
+  },
+  _enviarMsgAnual() {
+    const texto = ($('ma-msg')?.value||'').trim();
+    if (!texto) { TOAST.show('Escreva a mensagem primeiro.', 'err'); return; }
+    const alvo = DB.boloesParcelados.minhasParticipacoes()[0];
+    if (!alvo) return;
+    DB.anualMensagens.enviar({ id:uid(), bolao_parcelado_id:alvo.bolao.id, participante_id:alvo.participante.id, nome:S.user.nome, fone:S.user.fone||'', mensagem:texto });
+    $('ma-msg').value='';
+    TOAST.show('📨 Mensagem enviada ao administrador!', 'ok');
+    setTimeout(()=>R._carregarMsgsMeuAnual(), 900);
+  },
+
+  // Caixa de mensagens dos participantes (privada — só admin/dev), na tela de gestão do bolão
+  async _carregarMsgsAnualDet(bolaoId) {
+    const el = $('ad-msgs'); if (!el) return;
+    const todas = await DB.anualMensagens.todas();
+    if (S.tela !== 'anualDet' || !$('ad-msgs')) return;
+    const msgs = todas.filter(m => m.bolao_parcelado_id === bolaoId);
+    el.innerHTML = msgs.length ? msgs.map(m=>`
+      <div class="lote-card" ${!m.lida?'style="border-color:var(--gold)"':''}>
+        <div class="fxb">
+          <div style="font-weight:600">${COTAS._esc(m.nome||'Sem nome')} ${!m.lida?'<span class="badge txs" style="background:var(--gold);color:#000">Nova</span>':''}</div>
+          <div class="txs muted">${new Date(m.criado).toLocaleString('pt-BR')}</div>
+        </div>
+        <div class="txs mt4">${COTAS._esc(m.mensagem)}</div>
+        <div class="fxb mt8">
+          ${m.fone?`<a class="btn btn-o btn-sm" href="https://wa.me/${m.fone}" target="_blank">💬 Responder no WhatsApp</a>`:'<span></span>'}
+          ${!m.lida?`<button class="btn btn-o btn-sm" onclick="R._marcarMsgLida('${m.id}','${bolaoId}')">✓ Marcar como lida</button>`:''}
+        </div>
+      </div>`).join('')
+    : '<p class="txs muted">Nenhuma mensagem dos participantes ainda.</p>';
+  },
+  async _marcarMsgLida(id, bolaoId) {
+    await DB.anualMensagens.marcarLida(id);
+    R._carregarMsgsAnualDet(bolaoId);
+  },
+
   _mMeuAnualAcao() {
     const info = DB.boloesParcelados.minhaParticipacao();
     if (!info) return;
@@ -2248,8 +2348,11 @@ const R = {
           </div>`).join('')}
       </div>` : ''}
       <div class="sectt mb8 mt16">Arrecadado × Esperado</div>
-      <div class="chart-w"><canvas id="chart-anual-prog"></canvas></div>`;
+      <div class="chart-w"><canvas id="chart-anual-prog"></canvas></div>
+      <div class="sectt mb8 mt16">📨 Mensagens dos participantes</div>
+      <div id="ad-msgs"><div class="loading"><div class="spinner"></div></div></div>`;
 
+    R._carregarMsgsAnualDet(b.id);
     setTimeout(() => {
       ['anualStatus','anualProgresso'].forEach(k=>{ S.charts[k]?.destroy?.(); delete S.charts[k]; });
       const ctx1 = $('chart-anual-status');
