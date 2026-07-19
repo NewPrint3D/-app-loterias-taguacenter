@@ -543,7 +543,7 @@ app.post('/api/cotas/:id/comprovante', async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE cotas SET status='comprovante', comprovante=$2, expira_em=NULL
-       WHERE id=$1 AND status IN ('reservada','comprovante') RETURNING *`,
+       WHERE id=$1 AND status IN ('reservada','comprovante','rejeitada') RETURNING *`,
       [req.params.id, img]
     );
     if (!rows.length) return res.status(409).json({ ok: false, error: 'Reserve a cota antes de anexar o comprovante.' });
@@ -557,6 +557,23 @@ app.put('/api/cotas/:id/confirmar', async (req, res) => {
   try {
     const { rows } = await pool.query(`UPDATE cotas SET status='paga', pago_em=NOW() WHERE id=$1 RETURNING *`, [req.params.id]);
     res.json({ ok: true, cota: rows[0] || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Admin recusa o comprovante — a cota CONTINUA com o apostador (status 'rejeitada', sem
+// cronômetro, o cron de expiração não toca nela) até ele reenviar outro comprovante (volta pra
+// 'comprovante'), o admin aceitar mesmo assim (/confirmar) ou liberar a cota (/liberar).
+app.put('/api/cotas/:id/rejeitar', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE cotas SET status='rejeitada', expira_em=NULL WHERE id=$1 AND status='comprovante' RETURNING *`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(409).json({ ok: false, error: 'Essa cota não tem comprovante aguardando conferência.' });
+    // Reabre o lote se estava esgotado — senão o apostador não vê mais a cota pra reenviar
+    // (a tela do cliente só lista lotes ativos). Mesmo comportamento do /liberar.
+    await pool.query(`UPDATE lotes SET status='ativo', aviso_esgotado=false WHERE id=$1 AND status='esgotado'`, [rows[0].lote_id]);
+    res.json({ ok: true, cota: rows[0] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

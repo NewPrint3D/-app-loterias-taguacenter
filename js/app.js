@@ -832,7 +832,7 @@ const R = {
       <div id="boloes-ativos-card" class="boloes-ativos-card" onclick="R.ir('cotas')">
         <div class="bac-emoji">🧾</div>
         <div class="bac-info">
-          <div class="bac-titulo">Bolões Ativos</div>
+          <div class="bac-titulo">Comprar cotas de bolões ativos</div>
           <div class="bac-sub" id="bac-sub">Carregando…</div>
         </div>
         <span class="bac-seta">›</span>
@@ -1085,14 +1085,14 @@ const R = {
     for (const l of ativos) { const c = COTAS._minhaCota(l); if (c) { minha = c; loteMinha = l; break; } }
     const part = $('minha-participacao'); if (!part) return;
     if (minha) {
-      const statusTxt = { reservada:'⏳ aguardando pagamento', comprovante:'📎 aguardando confirmação', paga:'✅ pago' }[minha.status] || '';
+      const statusTxt = { reservada:'⏳ aguardando pagamento', comprovante:'📎 aguardando confirmação', paga:'✅ pago', rejeitada:'⚠️ comprovante recusado — reenvie' }[minha.status] || '';
       part.className = 'minha-participacao';
       part.onclick = () => R.ir('cotas');
       part.innerHTML = '🧾 Você tem a cota #' + minha.numero + ' em <strong>' + COTAS._esc(loteMinha.nome) + '</strong> — ' + statusTxt;
     } else {
       part.className = 'sem-participacao';
       part.onclick = () => R.ir('cotas');
-      part.innerHTML = 'Participe dos nossos bolões! 🍀 Toque em "Bolões Ativos" acima e escolha sua cota.';
+      part.innerHTML = 'Participe dos nossos bolões! 🍀 Toque em "Comprar cotas de bolões ativos" acima e escolha sua cota.';
     }
   },
 
@@ -3845,11 +3845,12 @@ const COTAS = {
     '</div>';
   },
   _cotaAdmin(c) {
-    const cls = ({ livre:'ct-livre', reservada:'ct-res', comprovante:'ct-comp', paga:'ct-paga' })[c.status] || '';
-    const badge = ({ livre:'Livre', reservada:'⏳ Pendente', comprovante:'📎 Enviado', paga:'✅ Pago' })[c.status];
+    const cls = ({ livre:'ct-livre', reservada:'ct-res', comprovante:'ct-comp', paga:'ct-paga', rejeitada:'ct-res' })[c.status] || '';
+    const badge = ({ livre:'Livre', reservada:'⏳ Pendente', comprovante:'📎 Enviado', paga:'✅ Pago', rejeitada:'⚠️ Recusado' })[c.status];
     let acoes = '';
-    if (c.status==='comprovante') acoes = '<button class="ct-b" title="Ver comprovante" onclick="COTAS.verComprovante(\'' + c.id + '\')">👁️</button><button class="ct-b ok" title="Confirmar pago" onclick="COTAS.confirmar(\'' + c.id + '\')">✅</button><button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
+    if (c.status==='comprovante') acoes = '<button class="ct-b" title="Ver comprovante" onclick="COTAS.verComprovante(\'' + c.id + '\')">👁️</button><button class="ct-b ok" title="Confirmar pago" onclick="COTAS.confirmar(\'' + c.id + '\')">✅</button><button class="ct-b" title="Recusar comprovante" onclick="COTAS.rejeitar(\'' + c.id + '\')">❌</button><button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
     else if (c.status==='reservada') acoes = '<button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
+    else if (c.status==='rejeitada') acoes = '<button class="ct-b" title="Ver comprovante recusado" onclick="COTAS.verComprovante(\'' + c.id + '\')">👁️</button><button class="ct-b ok" title="Aceitar mesmo assim" onclick="COTAS.confirmar(\'' + c.id + '\')">✅</button><button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
     else if (c.status==='paga') acoes = '<button class="ct-b" title="Ver comprovante" onclick="COTAS.verComprovante(\'' + c.id + '\')">👁️</button><button class="ct-b" title="Liberar" onclick="COTAS.liberar(\'' + c.id + '\')">↩️</button>';
     const nome = c.nome ? this._esc(c.nome) : '<span class="muted">livre</span>';
     const cd = (c.status==='reservada' && c.expira_em) ? '<div class="cota-cd" id="cd-cota-' + c.id + '">' + this._fmtMMSS(this._restanteMsCota(c)) + '</div>' : '';
@@ -3861,6 +3862,12 @@ const COTAS = {
     MODAL.open('<div class="sectt mb8">Comprovante — ' + this._esc(c.nome) + ' (cota #' + c.numero + ')</div><img src="' + c.comprovante + '" style="width:100%;border-radius:10px" alt="comprovante">');
   },
   async confirmar(id) { await _api.put('/api/cotas/' + id + '/confirmar'); await this._carregar(); this._renderAdmin(); TOAST.show('✅ Pagamento confirmado.', 'ok'); },
+  async rejeitar(id) {
+    if (!confirm('Recusar esse comprovante? O apostador verá "pendente — entre em contato com o administrador" e poderá reenviar outro.')) return;
+    await _api.put('/api/cotas/' + id + '/rejeitar');
+    await this._carregar(); this._renderAdmin();
+    TOAST.show('❌ Comprovante recusado — a cota continua com o apostador até ele reenviar.', 'ok');
+  },
   async liberar(id) { if (!confirm('Liberar essa cota de volta pra venda?')) return; await _api.put('/api/cotas/' + id + '/liberar'); await this._carregar(); this._renderAdmin(); },
   async encerrar(id) { if (!confirm('Encerrar o lote agora?')) return; await _api.put('/api/lotes/' + id + '/encerrar'); await this._carregar(); this._renderAdmin(); },
   async excluir(id) { if (!confirm('Excluir o lote e todas as cotas? Não dá pra desfazer.')) return; await _api.del('/api/lotes/' + id); await this._carregar(); this._renderAdmin(); },
@@ -3960,7 +3967,8 @@ const COTAS = {
         const cd = c.expira_em ? '<div class="cota-cd" id="cd-cota-' + c.id + '">' + this._fmtMMSS(this._restanteMsCota(c)) + '</div>' : '';
         return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div>' + cd + '<button class="btn btn-p btn-sm cota-anexar" onclick="COTAS.anexar(\'' + c.id + '\')">📎 Anexar comprovante</button></div>';
       }
-      if (c.status==='comprovante') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><div class="cota-badge">📎 Comprovante enviado ✓</div></div>';
+      if (c.status==='comprovante') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><div class="cota-badge">📎 Comprovante enviado ✓ — aguardando confirmação</div></div>';
+      if (c.status==='rejeitada') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><div class="cota-badge" style="color:var(--red)">⚠️ Pendente — entre em contato com o administrador</div><button class="btn btn-p btn-sm cota-anexar" onclick="COTAS.anexar(\'' + c.id + '\')">📎 Reenviar comprovante</button></div>';
       if (c.status==='paga') return '<div class="cota ct-minha"><div class="cota-num">#' + c.numero + '</div><div class="cota-nome">Você</div><div class="cota-badge">✅ Pago</div></div>';
     }
     if (c.status==='livre') return '<div class="cota ct-livre"><div class="cota-num">#' + c.numero + '</div><button class="btn btn-o btn-sm" onclick="COTAS.reservar(\'' + l.id + '\',\'' + c.id + '\')">Escolher</button></div>';

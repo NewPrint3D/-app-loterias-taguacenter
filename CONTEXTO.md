@@ -454,6 +454,29 @@ dados tanto do admin quanto do apostador**, pra ajustar/configurar qualquer part
   Faixa dourada fixa `#sim-badge` ("🧪 Testando como X — toque p/ voltar ao Dev") →
   `DEV.voltarDev()` restaura e volta pro Controle Dev. `AUTH.sair()` limpa `S.devBackup`/faixa.
 
+## Card "Comprar cotas de bolões ativos" + recusa de comprovante no Cotas ao Vivo (19/07/2026)
+
+Pedido do usuário: o card da Home do apostador vira **"Comprar cotas de bolões ativos"** (o admin
+carrega ali diariamente as cotas à venda), e o fluxo ganha a **recusa de comprovante**: quando o
+admin rechaça, o apostador vê "pendente — entre em contato com o administrador" e pode reenviar.
+
+- **Renomeado** o título do card (`bac-titulo`) e o texto de convite ("Toque em 'Comprar cotas de
+  bolões ativos' acima..."). O resto do fluxo já existia e não mudou: cota `livre` → reservar
+  (nome/telefone) → `reservada` + cronômetro individual → anexar comprovante → `comprovante`
+  ("aguardando confirmação", texto adicionado ao badge do cliente) → admin confirma → `paga`.
+- **Status novo `rejeitada`** (quinto estado da cota):
+  - Backend: `PUT /api/cotas/:id/rejeitar` (protegida; só a partir de `comprovante`; zera
+    `expira_em` — o cron de expiração só toca em `reservada`, então a cota NÃO volta pra venda,
+    continua com o apostador). Reabre o lote se estava `esgotado` (senão o apostador não veria a
+    cota pra reenviar — tela do cliente só lista lotes ativos; mesmo comportamento do `/liberar`).
+    `POST /api/cotas/:id/comprovante` passou a aceitar reenvio a partir de `rejeitada`.
+  - Admin (`_cotaAdmin`): botão ❌ "Recusar comprovante" ao lado do ✅; cota recusada mostra badge
+    "⚠️ Recusado" com ações 👁️ (ver o comprovante recusado) / ✅ (aceitar mesmo assim) / ↩️ liberar.
+  - Cliente (`_cotaCliente`): a própria cota recusada mostra "⚠️ Pendente — entre em contato com o
+    administrador" (vermelho) + botão "📎 Reenviar comprovante"; para os demais apostadores ela
+    aparece como "⏳ Reservada" normal. Resumo da Home (`_renderBoloesAtivos`) ganhou o texto
+    "⚠️ comprovante recusado — reenvie".
+
 ## Funcionalidades implementadas
 
 - Splash screen + login (bcrypt + JWT 24h, senha em texto puro); cliente entra com **nome completo +
