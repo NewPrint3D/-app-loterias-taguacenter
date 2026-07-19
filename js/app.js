@@ -502,16 +502,7 @@ const AUTH = {
     $('bloqueio').hidden = true;
     $('shell').hidden = false;
 
-    const r = S.user.role;
-    const badge = $('h-badge');
-    badge.className = `badge b-${r}`;
-    badge.textContent = r==='dev'?'DEV':r==='admin'?'Admin':'Apostador';
-
-    // Exibe nav correto
-    const isAdmin = AUTH.isAdmin();
-    $('nav-user').hidden  = isAdmin;
-    $('nav-admin').hidden = !isAdmin;
-    $('h-premio').hidden  = isAdmin;
+    AUTH._aplicarPerfilUI();
 
     DB.ctrl.log('Login: ' + (S.user.nome||S.user.login));
     ZE.start();
@@ -542,6 +533,8 @@ const AUTH = {
     sessionStorage.removeItem('ltr_s');
     _token.clear();
     S.user = null;
+    S.devBackup = null;
+    const sb = $('sim-badge'); if (sb) sb.hidden = true;
     S.stack = [];
     $('shell').hidden = true;
     $('nav-user').hidden = true;
@@ -564,6 +557,28 @@ const AUTH = {
   },
 
   isAdmin: () => ['admin','dev'].includes(S.user?.role),
+
+  // Mostra/esconde os botões exclusivos do dev na nav do admin (Cotas, Palpiteiro).
+  _ajustarNavDev() {
+    const ehDev = S.user?.role === 'dev';
+    document.querySelectorAll('#nav-admin .nb-so-dev').forEach(b => b.hidden = !ehDev);
+  },
+
+  // Aplica badge, navs e ícones do header conforme o role atual de S.user.
+  // Usado no login e também quando o dev troca de perfil pra testar (DEV.testarComo).
+  _aplicarPerfilUI() {
+    const r = S.user.role;
+    const badge = $('h-badge');
+    badge.className = `badge b-${r}`;
+    badge.textContent = r==='dev'?'DEV':r==='admin'?'Admin':'Apostador';
+    // O dev usa a nav do admin com os botões extras do apostador (Cotas, Palpiteiro),
+    // pra poder operar/ajustar o app inteiro de qualquer perfil.
+    const isAdmin = AUTH.isAdmin();
+    $('nav-user').hidden  = isAdmin;
+    $('nav-admin').hidden = !isAdmin;
+    AUTH._ajustarNavDev();
+    $('h-premio').hidden  = (r === 'admin'); // dev e apostador veem o 🏆
+  },
 };
 
 // =============================================
@@ -764,7 +779,10 @@ const R = {
   // ---- HOME ----
   _home() {
     $('h-title').innerHTML='<img src="img/logo.png" alt="Lotérica Taguacenter" class="h-logo-img">';
-    if (AUTH.isAdmin()) {
+    // Dev vê a Home COMPLETA do apostador (Bolões Ativos, resultados, planilha do Bolão Anual,
+    // Palpiteiro) com os atalhos de gestão do admin embutidos — pra ajustar qualquer coisa
+    // enxergando o app inteiro. Admin mantém a Home de gestão enxuta.
+    if (S.user.role === 'admin') {
       R._homeAdmin();
     } else {
       R._homeUser();
@@ -907,22 +925,48 @@ const R = {
   // nome abre as ações (anexar comprovante / declarar quitação).
   _renderHomeAnual() {
     const slot = $('home-anual-slot'); if (!slot) return;
+    // Admin/dev na Home completa: não participa por telefone, então mostra a planilha de TODOS os
+    // bolões parcelados com todos os participantes (mesma visão de transparência do apostador),
+    // com atalho pra gestão — em vez de cair na tabela vazia por não ter participação própria.
+    if (AUTH.isAdmin()) {
+      const bs = DB.boloesParcelados.list();
+      if (!bs.length) { slot.innerHTML = R._anualTabelaVazia(); return; }
+      slot.innerHTML = bs.map(b => R._anualTabelaBolao(b, { gerenciar:true })).join('');
+      return;
+    }
     const info = DB.boloesParcelados.minhaParticipacao();
-    if (!info) { slot.innerHTML = R._anualTabelaVazia(); return; }
-    const { bolao:b, participante:p } = info;
+    if (info) {
+      slot.innerHTML = R._anualTabelaBolao(info.bolao, { euId: info.participante.id });
+      return;
+    }
+    // Apostador que (ainda) não participa: mesmo assim vê a planilha dos bolões do grupo
+    // (transparência — só nomes, sem telefone), sem linha própria nem ações. Vazia só se
+    // não existir nenhum bolão cadastrado.
+    const bs = DB.boloesParcelados.list();
+    if (!bs.length) { slot.innerHTML = R._anualTabelaVazia(); return; }
+    slot.innerHTML = bs.map(b => R._anualTabelaBolao(b)).join('');
+  },
+  // Planilha de um bolão parcelado (usada na Home dos 3 perfis):
+  // - gerenciar:true → botão "Gerenciar ›" no título (admin/dev)
+  // - euId → destaca a linha do próprio apostador com as ações de comprovante/quitação
+  _anualTabelaBolao(b, { gerenciar=false, euId=null } = {}) {
     const parts = b.participantes||[];
     const meses = Array.from({length:b.duracao_meses}, (_,i)=>i+1);
-    slot.innerHTML = `
-      <div class="sectt mb8 mt16">📅 ${b.nome} — acompanhamento</div>
+    return `
+      <div class="sectt mb8 mt16 fxb">
+        <span>📅 ${b.nome} — acompanhamento</span>
+        ${gerenciar?`<button class="btn btn-o btn-sm" onclick="R._irAnualDet('${b.id}')">Gerenciar ›</button>`:''}
+      </div>
       <div class="anual-tbl-wrap mb16">
         <table class="anual-tbl">
           <thead><tr><th>Participante</th>${meses.map(m=>`<th>${MESES_NOMES[m-1].slice(0,3)}</th>`).join('')}</tr></thead>
           <tbody>
-            ${parts.map(pp => `
-              <tr class="${pp.id===p.id?'anual-tbl-eu':''}">
-                <td ${pp.id===p.id?'style="cursor:pointer" onclick="R._mMeuAnualAcao()"':''}>${pp.nome}${pp.id===p.id?' <span class="txs muted">(você — toque p/ anexar)</span>':''}</td>
+            ${parts.length ? parts.map(pp => `
+              <tr class="${pp.id===euId?'anual-tbl-eu':''}">
+                <td ${pp.id===euId?'style="cursor:pointer" onclick="R._mMeuAnualAcao()"':''}>${pp.nome}${pp.id===euId?' <span class="txs muted">(você — toque p/ anexar)</span>':''}</td>
                 ${meses.map(m=>{ const c=R._anualCelula(b,pp,m); return `<td class="${c.cls}" title="${c.titulo}">${c.icon}</td>`; }).join('')}
-              </tr>`).join('')}
+              </tr>`).join('')
+            : `<tr><td colspan="${meses.length+1}" class="tc muted" style="padding:18px 10px;white-space:normal">⏳ ${gerenciar?'Sem participantes ainda — toque em "Gerenciar" pra importar do grupo.':'Sem participantes ainda — aguardando dados dos grupos de WhatsApp.'}</td></tr>`}
           </tbody>
         </table>
       </div>`;
@@ -1120,6 +1164,11 @@ const R = {
       </div>
 
       ${R._anualHomeCard()}
+
+      ${AUTH.isAdmin() ? `
+      <button class="btn btn-o btn-f mt4" onclick="R._ltClick('${ltId}')">
+        🎲 Gerenciar bolões de ${lt.nome}
+      </button>` : ''}
 
       <button class="btn btn-p btn-f mt4 mb4" onclick="R._iaClick('${ltId}')">
         <img src="img/ze-loteca.png" class="ze-btn-ico" alt="Palpiteiro"> Quer que o Palpiteiro te ajude a escolher os números?
@@ -2943,14 +2992,14 @@ const R = {
 
   // ---- PREMIAÇÃO (cliente) ----
   _premios() {
-    if (AUTH.isAdmin()) { R.ir('home'); return; }
+    if (S.user.role === 'admin') { R.ir('home'); return; } // dev pode abrir (visão do apostador)
     $('h-title').textContent='Premiação';
     const minhas = DB.premiacoes.minhas().sort((a,b)=>(b.criado||'').localeCompare(a.criado||''));
     $('view-premios').innerHTML = `
       <div class="tc mb16">
         <div style="font-size:2.6rem">🏆</div>
         <div style="font-size:1.1rem;font-weight:700;margin-top:6px">${COTAS._esc(S.user.nome)}</div>
-        <div class="muted txs mt4">📱 ${COTAS._esc(S.user.fone)}</div>
+        <div class="muted txs mt4">📱 ${COTAS._esc(S.user.fone||'—')}</div>
       </div>
       ${!minhas.length
         ? '<div class="empty"><div class="ei">🏆</div><p>Nenhuma premiação por aqui ainda.</p><p class="txs muted">Quando você ganhar algum prêmio, ele aparece nesta tela.</p></div>'
@@ -3017,6 +3066,16 @@ const R = {
         </div>
         <div class="fg mt12"><label>Mensagem da tela de manutenção</label><textarea id="dev-msg" rows="2">${c.msg||'Sistema temporariamente indisponível. Entre em contato com o suporte.'}</textarea></div>
         <button class="btn btn-p btn-sm" onclick="DEV.saveMsg()">Salvar mensagem</button>
+      </div>
+      <div class="dev-panel">
+        <h3>🧪 Testar como</h3>
+        <p class="txs muted mb8">Veja o app exatamente como o <strong>admin</strong> ou um
+        <strong>apostador</strong> veem — funciona até em manutenção (a tela de manutenção não
+        bloqueia você). Pra voltar, toque na faixa amarela "Testando como..." na parte de baixo.</p>
+        <div class="fr">
+          <button class="btn btn-o btn-sm" onclick="DEV.testarComo('admin')">🛠️ Como Admin</button>
+          <button class="btn btn-o btn-sm" onclick="DEV.testarComo('cliente')">🎰 Como Apostador</button>
+        </div>
       </div>
       <div class="dev-panel">
         <h3>🔔 Aviso Instantâneo de Resultado</h3>
@@ -3970,12 +4029,52 @@ const DEV = {
     if(data?.ok){
       S.user={login:'dev',role:'dev',nome:'Desenvolvedor'};
       sessionStorage.setItem('ltr_s',JSON.stringify(S.user));
-      const b=$('h-badge'); b.className='badge b-dev'; b.textContent='DEV';
-      $('nav-user').hidden=true;
-      $('nav-admin').hidden=false;
+      AUTH._aplicarPerfilUI();
       R.ir('controle');
     } else alert(data?.error || 'Senha incorreta.');
   },
+  // ---- Testar como admin/apostador (simulação de perfil do dev) ----
+  // Mesmo em manutenção o dev pode "vestir" outro perfil pra conferir como o app aparece
+  // pro admin e pro apostador — sem deslogar e sem tirar o app da manutenção. A troca é só
+  // em memória (o sessionStorage continua com o dev), então um F5 volta direto pro dev.
+  testarComo(role) {
+    if (S.user?.role!=='dev' || S.devBackup) return;
+    if (role==='admin') { DEV._iniciarSimulacao({ role:'admin', nome:'Administrador' }); return; }
+    MODAL.open(`
+      <div class="m-title">🧪 Testar como apostador</div>
+      <p class="txs muted mb8">Preencha com o nome/telefone de um apostador de verdade pra ver as
+      premiações, o bolão anual e as cotas DELE — ou deixe como está pra um apostador genérico.</p>
+      <div class="fg mb8"><label>Nome</label><input id="sim-nome" value="Apostador Teste"></div>
+      <div class="fg mb8"><label>Telefone (opcional — com DDD)</label><input id="sim-fone" placeholder="61999999999"></div>
+      <button class="btn btn-p btn-f" onclick="DEV._simApostador()">Entrar na visão do apostador</button>`);
+  },
+  _simApostador() {
+    const nome=$('sim-nome').value.trim()||'Apostador Teste';
+    const fone=$('sim-fone').value.trim();
+    MODAL.close();
+    DEV._iniciarSimulacao({ role:'cliente', nome, fone: fone?normalizarFone(fone):'' });
+  },
+  _iniciarSimulacao(user) {
+    S.devBackup = S.user;
+    S.user = user;
+    S.stack = [];
+    AUTH._aplicarPerfilUI();
+    const b=$('sim-badge');
+    b.hidden=false;
+    b.textContent=`🧪 Testando como ${user.role==='admin'?'Admin':'Apostador'} — toque p/ voltar ao Dev`;
+    R.ir('home');
+    if (user.role==='cliente') R._verificarPremiacaoCliente();
+  },
+  voltarDev() {
+    if (!S.devBackup) return;
+    S.user = S.devBackup; S.devBackup = null;
+    S.stack = [];
+    $('sim-badge').hidden = true;
+    AUTH._aplicarPerfilUI();
+    R.ir('controle');
+    TOAST.show('🔒 De volta ao perfil Desenvolvedor.', 'ok');
+  },
+
   block(v) {
     const c=DB.ctrl.get(); c.bloqueado=v; DB.ctrl.set(c);
     DB.ctrl.log(`App ${v?'em MANUTENÇÃO (só o dev opera)':'de volta ao ar'}`);

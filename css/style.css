@@ -109,6 +109,18 @@ body {
 }
 .nb span { font-size: .62rem; font-weight: 500; }
 .nb.on   { color: var(--primary); }
+/* .nb tem display:flex, que venceria o atributo hidden sem esta regra
+   (botões .nb-so-dev ficam ocultos pra admin, visíveis só pro dev) */
+.nb[hidden] { display: none; }
+
+/* Faixa "🧪 Testando como..." do dev — flutua acima da barra inferior; toque volta ao Dev */
+.sim-badge {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--nh) + 10px); z-index: 120;
+  background: var(--gold, #d4a017); color: #000; border: none; cursor: pointer;
+  font-size: .72rem; font-weight: 700; padding: 8px 14px; border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.45); white-space: nowrap;
+}
 
 /* ---- VIEWS ---- */
 .view { padding: 14px; }

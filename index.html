@@ -93,6 +93,9 @@
   <!-- A bolinha do Palpiteiro (número girando) mudou de lugar — agora vive dentro do card
        "Bolões Ativos" da Home (ver R._homeUser em js/app.js), não mais flutuando aqui. -->
 
+  <!-- Faixa de simulação: aparece quando o dev está testando como admin/apostador -->
+  <button id="sim-badge" class="sim-badge" hidden onclick="DEV.voltarDev()"></button>
+
   <!-- Nav apostador (usuário simples) -->
   <nav id="nav-user" hidden>
     <button class="nb on" data-v="home"   onclick="R.ir('home')">🏠<span>Início</span></button>
@@ -101,10 +104,12 @@
     <button class="nb"    data-v="perfil" onclick="R.ir('perfil')">👤<span>Conta</span></button>
   </nav>
 
-  <!-- Nav admin / dev -->
+  <!-- Nav admin / dev (os botões .nb-so-dev só aparecem pro role dev — visão completa do app) -->
   <nav id="nav-admin" hidden>
     <button class="nb on" data-v="home"       onclick="R.ir('home')">🏠<span>Início</span></button>
     <button class="nb"    data-v="grupos"     onclick="R.ir('grupos')">👥<span>Grupos</span></button>
+    <button class="nb nb-so-dev" data-v="cotas" hidden onclick="R.ir('cotas')">🧾<span>Cotas</span></button>
+    <button class="nb nb-so-dev" data-v="ia"    hidden onclick="R.ir('ia')">🎯<span>Palpiteiro</span></button>
     <button class="nb"    data-v="resultados" onclick="R.ir('resultados')">📊<span>Result.</span></button>
     <button class="nb"    data-v="admin"      onclick="R.ir('admin')">🛠️<span>Config.</span></button>
     <button class="nb"    data-v="perfil"     onclick="R.ir('perfil')">👤<span>Conta</span></button>

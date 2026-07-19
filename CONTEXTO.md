@@ -423,6 +423,37 @@ de manutenção até o dev colocar o app de volta no ar.
   - Painel renomeado pra "🛠️ Modo Manutenção", com texto explicando a regra; a saída de
     emergência pela tela de manutenção (7 toques no 🔒 + senha dev) continua existindo.
 
+## Visão completa do Dev + "Testar como" admin/apostador (19/07/2026)
+
+Pedido do usuário: logado como dev, a tela estava incompleta — precisa ter **todos os ícones e
+dados tanto do admin quanto do apostador**, pra ajustar/configurar qualquer parte do app; e poder
+**testar as visões de admin e apostador mesmo em manutenção**, sem tirar o app do ar.
+
+- **Nav do dev = superconjunto**: `#nav-admin` ganhou os botões `Cotas` 🧾 e `Palpiteiro` 🎯
+  (classe `.nb-so-dev`, ocultos pro admin via `AUTH._ajustarNavDev()`; CSS `.nb[hidden]` porque
+  `.nb` tem `display:flex`, que venceria o atributo `hidden`). Dev vê 7 abas: Início, Grupos,
+  Cotas, Palpiteiro, Result., Config., Conta.
+- **Home do dev = Home completa do apostador + atalhos de gestão** (`R._home` manda `dev` pra
+  `_homeUser`; só `admin` cai na `_homeAdmin` enxuta): card Bolões Ativos, grade selecionável com
+  último resultado + quentes/frios, planilha do Bolão Anual, card Bolão Anual (variante admin) e
+  botão novo "🎲 Gerenciar bolões de [loteria]" (`_ltClick`) — recupera o acesso por loteria.
+- **🏆 Premiação visível pro dev** (`h-premio` só some pra `admin`); `_premios()` deixou de expulsar
+  o dev e mostra `fone||'—'`.
+- **`AUTH._aplicarPerfilUI()`**: helper único (badge + navs + h-premio) usado no login normal, no
+  login dev por 7 toques e na simulação de perfil.
+- **Planilha da Home unificada em `R._anualTabelaBolao(b,{gerenciar,euId})`** (admin/dev com botão
+  "Gerenciar ›"; apostador participante com linha própria destacada + ações). **Fix de percepção
+  achado em teste**: apostador que não participa via "planilha vazia — aguardando dados" mesmo com
+  bolão cheio (o casamento é por telefone) — agora apostador não-participante também vê a planilha
+  completa dos bolões (transparência, só nomes), vazia apenas se não existir bolão nenhum.
+- **"🧪 Testar como" (Controle Dev)**: `DEV.testarComo('admin'|'cliente')` troca `S.user` só em
+  memória (`S.devBackup` guarda o dev; sessionStorage continua dev → F5 volta pro dev), aplica a
+  UI do perfil e vai pra Home. Como não passa por novo login, **funciona em manutenção** — o dev
+  enxerga as visões de admin/apostador com o app fechado pro público. "Como Apostador" abre modal
+  com nome/telefone opcionais (telefone de participante real mostra premiações/bolão/cotas DELE).
+  Faixa dourada fixa `#sim-badge` ("🧪 Testando como X — toque p/ voltar ao Dev") →
+  `DEV.voltarDev()` restaura e volta pro Controle Dev. `AUTH.sair()` limpa `S.devBackup`/faixa.
+
 ## Funcionalidades implementadas
 
 - Splash screen + login (bcrypt + JWT 24h, senha em texto puro); cliente entra com **nome completo +
