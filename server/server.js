@@ -882,13 +882,14 @@ app.put('/api/bolao-parcelado-pagamentos/:id/status', async (req, res) => {
           [participante_id, mes]
         );
       }
-      // Comprovante ignorado — avisa o apostador automaticamente no WhatsApp dele (fire-and-forget,
-      // não atrasa a resposta pro admin; falha silenciosa se o bot estiver desconectado).
-      if (status === 'rejeitado') {
+      // Comprovante ignorado — a observação do admin é OPCIONAL: só avisa o apostador no
+      // WhatsApp se o admin escreveu algo (fire-and-forget; falha silenciosa se bot desconectado).
+      // Em branco, só muda o status — sem mensagem nenhuma.
+      if (status === 'rejeitado' && motivoRejeicao) {
         const part = await pool.query('SELECT fone FROM bolao_parcelado_participantes WHERE id=$1', [participante_id]);
         const fone = part.rows[0]?.fone;
         if (fone) {
-          const texto = `${motivoRejeicao ? motivoRejeicao + '\n\n' : ''}Por favor, regularize quanto antes e volte a nos enviar o comprovante.`;
+          const texto = `${motivoRejeicao}\n\nPor favor, regularize quanto antes e volte a nos enviar o comprovante.`;
           enviarWhatsAppIndividual(fone, texto).catch(() => {});
         }
       }

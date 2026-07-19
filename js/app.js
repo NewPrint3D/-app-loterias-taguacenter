@@ -1140,7 +1140,7 @@ const R = {
           <div class="fxb">
             <div style="font-weight:700">${MESES_NOMES[m-1]}${m===mesAtual?' <span class="txs muted">(mês corrente)</span>':''}</div>
             ${pendente?'<span class="badge b-pend">⏳ Aguardando confirmação</span>':''}
-            ${rejeitado?'<span class="badge" style="background:var(--red);color:#fff">⚠️ Verifique seu WhatsApp</span>':''}
+            ${rejeitado?`<span class="badge" style="background:var(--red);color:#fff">${pg?.motivo_rejeicao?'⚠️ Verifique seu WhatsApp':'⚠️ Comprovante ignorado — reenvie'}</span>`:''}
           </div>
           ${rejeitado && pg?.motivo_rejeicao ? `<div class="txs mt4" style="color:var(--red)">${pg.motivo_rejeicao}</div>` : ''}
           <button class="btn ${pendente||rejeitado?'btn-o':'btn-p'} btn-f mt8" onclick="MODAL.close();R._mCompAnualMes(${m})">📎 ${pendente||rejeitado?'Reenviar':'Anexar'} comprovante</button>
