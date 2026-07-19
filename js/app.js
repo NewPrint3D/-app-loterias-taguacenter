@@ -296,6 +296,7 @@ const DB = {
     minhas: async () => (S.user?.fone ? (await _api.get('/api/bolao-parcelado-mensagens?fone=' + encodeURIComponent(S.user.fone))) || [] : []),
     todas: async () => (await _api.get('/api/bolao-parcelado-mensagens')) || [],
     marcarLida: id => _api.put('/api/bolao-parcelado-mensagens/' + id + '/lida'),
+    responder: (id, resposta) => _api.put('/api/bolao-parcelado-mensagens/' + id + '/responder', { resposta }),
   },
   boloesParcelados: {
     list: ()  => S.cache.boloesParcelados || [],
@@ -1056,7 +1057,9 @@ const R = {
     el.innerHTML = msgs.length
       ? `<div class="sectt mb8">Suas mensagens</div>` + msgs.map(m=>`
         <div class="lote-card"><div class="txs">${COTAS._esc(m.mensagem)}</div>
-        <div class="txs muted mt4">${new Date(m.criado).toLocaleString('pt-BR')} · ${m.lida?'✓ lida pelo admin':'⏳ ainda não lida'}</div></div>`).join('')
+        <div class="txs muted mt4">${new Date(m.criado).toLocaleString('pt-BR')} · ${m.resposta?'✓ respondida':m.lida?'✓ lida pelo admin':'⏳ ainda não lida'}</div>
+        ${m.resposta?`<div class="txs mt8" style="border-left:3px solid var(--primary);padding-left:8px">↩️ <strong>Resposta do administrador</strong>${m.respondida_em?` (${new Date(m.respondida_em).toLocaleString('pt-BR')})`:''}:<br>${COTAS._esc(m.resposta)}</div>`:''}
+        </div>`).join('')
       : '<p class="txs muted">Nenhuma mensagem enviada ainda.</p>';
   },
   _enviarMsgAnual() {
@@ -1083,12 +1086,27 @@ const R = {
           <div class="txs muted">${new Date(m.criado).toLocaleString('pt-BR')}</div>
         </div>
         <div class="txs mt4">${COTAS._esc(m.mensagem)}</div>
+        ${m.resposta
+          ? `<div class="txs mt8" style="border-left:3px solid var(--primary);padding-left:8px">↩️ <strong>Sua resposta</strong> (${m.respondida_em?new Date(m.respondida_em).toLocaleString('pt-BR'):''}):<br>${COTAS._esc(m.resposta)}</div>`
+          : `<div class="fg mt8"><textarea id="resp-${m.id}" rows="2" maxlength="1000" placeholder="Escreva a resposta — vai pro WhatsApp do apostador e fica registrada no app..."></textarea></div>
+             <button class="btn btn-p btn-sm mt4" onclick="R._responderMsgAnual('${m.id}','${bolaoId}')">📨 Responder</button>`}
         <div class="fxb mt8">
-          ${m.fone?`<a class="btn btn-o btn-sm" href="https://wa.me/${m.fone}" target="_blank">💬 Responder no WhatsApp</a>`:'<span></span>'}
+          ${m.fone?`<a class="btn btn-o btn-sm" href="https://wa.me/${m.fone}" target="_blank">💬 Abrir conversa no WhatsApp</a>`:'<span></span>'}
           ${!m.lida?`<button class="btn btn-o btn-sm" onclick="R._marcarMsgLida('${m.id}','${bolaoId}')">✓ Marcar como lida</button>`:''}
         </div>
       </div>`).join('')
     : '<p class="txs muted">Nenhuma mensagem dos participantes ainda.</p>';
+  },
+  async _responderMsgAnual(id, bolaoId) {
+    const texto = ($('resp-'+id)?.value||'').trim();
+    if (!texto) { TOAST.show('Escreva a resposta primeiro.', 'err'); return; }
+    const r = await DB.anualMensagens.responder(id, texto);
+    const data = r ? await r.json().catch(()=>({})) : {};
+    if (!data.ok) { TOAST.show(data.error||'Erro ao enviar. Tente de novo.', 'err'); return; }
+    TOAST.show(data.whatsapp
+      ? '📨 Resposta enviada no WhatsApp do apostador e registrada no app!'
+      : '📨 Resposta registrada no app — bot desconectado, WhatsApp não foi enviado.', data.whatsapp?'ok':'err');
+    R._carregarMsgsAnualDet(bolaoId);
   },
   async _marcarMsgLida(id, bolaoId) {
     await DB.anualMensagens.marcarLida(id);
@@ -2495,14 +2513,16 @@ const R = {
       ${pg.status!=='pendente' ? `<button class="btn btn-o btn-f" onclick="R._confirmarPagAnual('${id}','pendente')">↩️ Reverter para pendente</button>` : ''}
     `);
   },
-  // Comprovante ignorado exige uma justificativa curta — enviada automaticamente pro WhatsApp do
-  // apostador (backend monta a mensagem final com o texto padrão de "regularize e reenvie").
+  // Comprovante ignorado: a observação é OPCIONAL — se o admin/dev escrever algo, o apostador
+  // recebe a mensagem automaticamente no WhatsApp dele; em branco, só muda o status (sem mensagem).
   _mIgnorarPagAnual(id) {
     MODAL.open(`
       <div class="m-title">🚫 Comprovante ignorado</div>
-      <p class="txs muted mb8">Explique rapidamente o motivo — o apostador recebe essa mensagem automaticamente no WhatsApp dele.</p>
+      <p class="txs muted mb8">Observações <strong>(opcional)</strong> — se você escrever algo (justificativa,
+      orientação, qualquer informação), o apostador recebe a mensagem automaticamente no WhatsApp
+      dele. Pode deixar em branco.</p>
       <div class="fg"><textarea id="ig-motivo" maxlength="200" placeholder="Ex: comprovante ilegível, valor errado, mês não bate..."></textarea></div>
-      <button class="btn btn-d btn-f" onclick="R._confirmarIgnorarPagAnual('${id}')">Enviar e avisar no WhatsApp</button>
+      <button class="btn btn-d btn-f" onclick="R._confirmarIgnorarPagAnual('${id}')">Confirmar</button>
     `);
   },
   _confirmarIgnorarPagAnual(id) {
@@ -2510,7 +2530,9 @@ const R = {
     DB.boloesParcelados.confirmarPagamento(id, 'rejeitado', motivo);
     MODAL.close();
     R._renderAnualDet();
-    TOAST.show('🚫 Comprovante ignorado — apostador avisado no WhatsApp.', 'err');
+    TOAST.show(motivo
+      ? '🚫 Comprovante ignorado — apostador avisado no WhatsApp.'
+      : '🚫 Comprovante ignorado (sem mensagem ao apostador).', 'err');
   },
   _confirmarPagAnual(id, status) {
     DB.boloesParcelados.confirmarPagamento(id, status);

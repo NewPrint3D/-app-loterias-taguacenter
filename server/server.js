@@ -800,7 +800,33 @@ app.post('/api/bolao-parcelado-mensagens', async (req, res) => {
        VALUES($1,$2,$3,$4,$5,$6,false,NOW()) ON CONFLICT(id) DO NOTHING`,
       [id, bolao_parcelado_id, participante_id || null, String(nome||'').slice(0,60), normalizarFoneServidor(fone||''), texto]
     );
+    // Aviso instantâneo no WhatsApp do admin (config.admin_fone, o mesmo do aviso de resultados) —
+    // fire-and-forget: não atrasa a resposta pro apostador; silencioso se bot/número não configurado.
+    (async () => {
+      const c = await pool.query('SELECT admin_fone FROM config WHERE id=1');
+      const adminFone = c.rows[0]?.admin_fone;
+      if (!adminFone) return;
+      const bl = await pool.query('SELECT nome FROM boloes_parcelados WHERE id=$1', [bolao_parcelado_id]);
+      await enviarWhatsAppIndividual(adminFone,
+        `📨 *Nova mensagem de participante*\n\nBolão: ${bl.rows[0]?.nome || 'Bolão Anual'}\nDe: ${String(nome||'Sem nome')}\n\n"${texto}"\n\n_Responda pelo app (gestão do bolão) — sua resposta chega no WhatsApp do apostador._`);
+    })().catch(() => {});
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Admin responde de dentro do app (protegida pelo middleware por ser PUT): grava a resposta no
+// banco (o apostador vê no histórico dele) E envia pro WhatsApp do apostador via bot.
+app.put('/api/bolao-parcelado-mensagens/:id/responder', async (req, res) => {
+  const resposta = String(req.body?.resposta || '').trim().slice(0, 1000);
+  if (!resposta) return res.status(400).json({ ok: false, error: 'Escreva a resposta.' });
+  try {
+    const { rows } = await pool.query(
+      `UPDATE bolao_parcelado_mensagens SET resposta=$2, respondida_em=NOW(), lida=true WHERE id=$1 RETURNING fone`,
+      [req.params.id, resposta]
+    );
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'Mensagem não encontrada.' });
+    const botOk = await enviarWhatsAppIndividual(rows[0].fone, `📨 *Resposta do administrador:*\n\n${resposta}`);
+    res.json({ ok: true, whatsapp: botOk });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -1094,6 +1120,9 @@ const _migracaoBoloesParcelados = (async () => {
       lida BOOLEAN DEFAULT false,
       criado TIMESTAMPTZ DEFAULT NOW()
     )`);
+    // Resposta do admin à mensagem (Opção B — 19/07/2026): fica no app E vai pro WhatsApp do apostador
+    await pool.query(`ALTER TABLE bolao_parcelado_mensagens ADD COLUMN IF NOT EXISTS resposta TEXT`);
+    await pool.query(`ALTER TABLE bolao_parcelado_mensagens ADD COLUMN IF NOT EXISTS respondida_em TIMESTAMPTZ`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_bpmsg_bolao ON bolao_parcelado_mensagens(bolao_parcelado_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_bpp_bolao ON bolao_parcelado_participantes(bolao_parcelado_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_bppag_part ON bolao_parcelado_pagamentos(participante_id)`);
