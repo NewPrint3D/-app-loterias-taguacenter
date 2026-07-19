@@ -1379,7 +1379,7 @@ const R = {
       </div>
       <div class="divider"></div>
       <div class="sectt mb8">Últimos resultados — ${lt.nome}</div>
-      ${dados.slice(0,3).map(r=>`
+      ${dados.slice(0,3).map((r,i)=>`
         <div class="res-card">
           <div class="res-top"><span>Concurso #${r.numero||r.concurso||'—'}</span><span>${r.data||'—'}</span></div>
           <div class="bolas">${(r.dezenas||[]).map(n=>`<span class="bola" style="background:${lt.cor}">${n}</span>`).join('')}${trevosHTML(r)}</div>
@@ -1387,6 +1387,11 @@ const R = {
             <span>${r.acumulado?'<span class="badge b-acum">Acumulado!</span>':`${r.ganhadores??0} ganhador${r.ganhadores!==1?'es':''}`}</span>
             <span>${r.premio?fmtPremio(r.premio):''}</span>
           </div>
+          ${i===0 && (r.prox||r.dataProxConcurso) ? `
+          <div class="txs mt8" style="border-top:1px solid var(--border);padding-top:8px">
+            <span class="muted">Estimativa de prêmio do próximo concurso${r.numProxConcurso?` (#${r.numProxConcurso})`:''}.${r.dataProxConcurso?` Sorteio em ${r.dataProxConcurso}:`:''}</span><br>
+            ${r.prox?`<span style="color:${lt.cor};font-weight:800;font-size:1.05rem">${fmt$(r.prox)}</span>`:''}
+          </div>`:''}
         </div>`).join('')}
       <p class="txs muted tc" style="margin-top:12px">Análise: ${total} concursos · ${hoje()}</p>`;
   },
