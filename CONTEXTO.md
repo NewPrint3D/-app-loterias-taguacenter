@@ -4,8 +4,9 @@ App de gestão de bolões para lotérica física (Taguacenter, Brasília).
 Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreSQL.
 Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
-**Estado em: 11/07/2026** (Etapa 3 — Bolão Anual/Parcelado — em produção, validada; inclui importação
-em lote do grupo e marcação de meses pagos em lote)
+**Estado em: 20/07/2026** (visão completa do Dev + Testar como; recusa de comprovante no Cotas ao
+Vivo; Meu Bolão Anual com mensagens privadas apostador↔admin respondíveis pelo app; badges de
+pendências pro admin/dev; bot WhatsApp CONECTADO com o número mestre — tudo em produção)
 
 ## Como rodar localmente
 
@@ -476,6 +477,74 @@ admin rechaça, o apostador vê "pendente — entre em contato com o administrad
     administrador" (vermelho) + botão "📎 Reenviar comprovante"; para os demais apostadores ela
     aparece como "⏳ Reservada" normal. Resumo da Home (`_renderBoloesAtivos`) ganhou o texto
     "⚠️ comprovante recusado — reenvie".
+
+## Meu Bolão Anual + mensagens privadas apostador↔admin (19/07/2026)
+
+Pedido do usuário: o card "Bolão Anual" do apostador participante deve mostrar o nome dele + os
+bolões que participa, e abrir um **controle pessoal** com: meses pagos, meses em atraso, quanto já
+pagou, quanto falta até o fim, e um canal privado de mensagens com o admin.
+
+- **Card personalizado** (`_anualHomeCard`): "Larissa — Mega da Virada 2026 — toque para abrir seu
+  controle". `DB.boloesParcelados.minhasParticipacoes()` (todas as participações, não só a 1ª).
+- **Tela `R._meuAnual`** (view `view-meuAnual`): stats por bolão (meses pagos/quitado, meses em
+  atraso via `_anualMesesEmAtraso`, já pago, falta), botão comprovante/quitação (`_mMeuAnualAcao`),
+  e seção "📨 Fale com o administrador" (textarea + histórico das próprias mensagens com status
+  lida/respondida).
+- **Tabela `bolao_parcelado_mensagens`** (id, bolao_parcelado_id FK CASCADE, participante_id, nome,
+  fone, mensagem, lida, resposta, respondida_em, criado). POST público (em `ehRotaEscritaPublica`);
+  GET com `?fone=` devolve só as daquele telefone (apostador); sem filtro exige JWT (admin) — 401.
+- **Admin**: caixa "📨 Mensagens dos participantes" na `_anualDet` (badge "Nova", marcar como lida,
+  link wa.me).
+- **Opção B (confirmada pelo usuário)**: nova mensagem dispara **aviso instantâneo no WhatsApp do
+  admin** (`config.admin_fone` via bot, fire-and-forget); admin **responde de dentro do app**
+  (`PUT /api/bolao-parcelado-mensagens/:id/responder`, protegida) — resposta vai pro WhatsApp do
+  apostador via bot E fica registrada (o apostador vê "↩️ Resposta do administrador" no histórico);
+  responder marca lida. Toast avisa se o bot estava desconectado (resposta fica só no app).
+- **Incidente de processo**: uma edição parcial pausada no working tree (modal "Observações
+  (opcional)" do comprovante ignorado) subiu por engano junto no commit da Opção B (`bbb3d6a`),
+  criando inconsistência tela×backend em produção — reportado ao usuário, que escolheu completar:
+  commit `b88506e` fez a observação ser opcional DE VERDADE (WhatsApp só dispara se o admin
+  escreveu algo; badge do apostador diferencia "Verifique seu WhatsApp" × "Comprovante ignorado —
+  reenvie"). Lição: conferir o diff staged quando houver edição parcial pendente.
+
+## Palpiteiro — estimativa do próximo concurso estilo Caixa (19/07/2026, commit `918c81e`)
+
+No card do concurso MAIS RECENTE de "Últimos resultados" do Palpiteiro:
+"Estimativa de prêmio do próximo concurso (#3034). Sorteio em 21/07/2026: **R$ 42.000.000,00**"
+(valor completo via `fmt$`, não abreviado; sempre exibida, acumulado ou não). Só no mais recente —
+o "próximo" dos concursos antigos já aconteceu. Home e Result. mantidas como estavam (já mostravam
+data+estimativa no formato compacto delas).
+
+## Bot conectado + página do QR auto-atualizável + badges de pendências (19-20/07/2026)
+
+- **Bot CONECTADO em produção** com o número mestre dos grupos. Causa raiz dos problemas de
+  vinculação do usuário: (1) escaneava a FOTO do QR compartilhada num grupo — o QR do WhatsApp
+  rotaciona a cada ~20-60s e cada código vale UMA leitura, foto é sempre código morto; (2) numa
+  tentativa, escaneou com o celular de OUTRO número (o QR deve ser lido pelo celular do número que
+  será o bot). QR só é necessário UMA vez — sessão fica no Neon (`wpp_auth`) e sobrevive a deploys;
+  reaparece só se nunca completou, se clicou "Desconectar" ou se o celular removeu o vínculo.
+- **Página `/api/wpp/qr` reescrita** (commit `1b9bd89`): busca o status a cada 5s e troca o QR
+  sozinha (código sempre fresco); mostra "✅ Conectado! Pode fechar esta página." ao completar.
+- **Grupos que o bot enxerga** (4): Restaurantes por Valencia, Familia B. Vieira, Aplicativo
+  Bolões, **Bolões da lotérica**.
+- **Fix "Vincular Grupos" vazio** (commit `b0a47a0`): a seção era montada ANTES da conexão
+  completar (dropdowns vazios) e o polling só atualizava o badge — agora, ao detectar `conectado`,
+  o painel inteiro se remonta sozinho (`BOT._iniciarPolling`), com os grupos no dropdown.
+- **Badges de pendências estilo WhatsApp** (commit `b0a47a0`, pedido do usuário): módulo `BADGES`
+  — bolinha vermelha com contagem nos ícones do admin/dev: **Grupos** (comprovantes de bolões
+  tradicionais `pags` pendentes) e **Config.** (comprovantes do Cotas ao Vivo aguardando +
+  pagamentos do Bolão Anual pendentes + mensagens não lidas); números também nos cards Pagamentos/
+  Cotas ao Vivo/Bolão Anual dentro do Config. Atualiza no login, a cada 60s (piggyback no polling
+  do admin) e na hora ao resolver cada pendência (hooks em confirmar/rejeitar/liberar cota,
+  aprovar/rejeitar pagamento, confirmar/ignorar pag anual, ler/responder mensagem). Apostador não
+  vê badges. CSS `.nav-notif`/`.amenu-notif`. Validado em produção com dados reais (Config. 3 =
+  1 cota + 2 anual).
+
+## REGRA DE TRABALHO estabelecida pelo usuário (19/07/2026)
+
+Ao receber um pedido: **examinar o código primeiro e AVISAR antes de mudar** — dizer se já está
+como pedido ou o que exatamente mudaria; só editar após confirmação. Não mudar nada sem
+necessidade. (Registrada também na memória persistente do assistente.)
 
 ## Funcionalidades implementadas
 
