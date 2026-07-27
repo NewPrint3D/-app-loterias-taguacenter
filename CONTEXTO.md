@@ -4,9 +4,10 @@ App de gestão de bolões para lotérica física (Taguacenter, Brasília).
 Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreSQL.
 Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
-**Estado em: 20/07/2026** (visão completa do Dev + Testar como; recusa de comprovante no Cotas ao
-Vivo; Meu Bolão Anual com mensagens privadas apostador↔admin respondíveis pelo app; badges de
-pendências pro admin/dev; bot WhatsApp CONECTADO com o número mestre — tudo em produção)
+**Estado em: 27/07/2026** (Neon estourou a cota gratuita → plano Launch + crons otimizados pra só
+consultar o banco quando há trabalho pendente; Home única pra todos os perfis + telefones com
+seletor de DDI publicados; bot WhatsApp conectado — sessão sobrevive a deploys; Modo Manutenção
+LIGADO, só sai com autorização explícita do Wesley — tudo em produção)
 
 ## Como rodar localmente
 
@@ -573,6 +574,34 @@ data+estimativa no formato compacto delas).
   vê badges. CSS `.nav-notif`/`.amenu-notif`. Validado em produção com dados reais (Config. 3 =
   1 cota + 2 anual).
 
+## Otimização Neon — crons sob demanda (27/07/2026, commit `3df10d2`)
+
+**Problema:** o app passou a dar "Erro ao salvar" e o bot não conectava — a cota mensal gratuita
+de computação do Neon (100h) estourou porque dois crons consultavam o banco a cada minuto, 24h/dia
+(~2.880 acordadas/dia), impedindo o banco de dormir. Solução imediata do usuário: upgrade pro
+plano **Launch** (~US$0,106/h de computação). Solução definitiva (esta seção): os ticks de minuto
+só tocam o banco quando existe trabalho pendente de verdade.
+
+- **Sinais em memória** (`server.js`, bloco "OTIMIZAÇÃO NEON"): `_haAvisosPendentes` e
+  `_haReservasComPrazo`. Os `cron.schedule('* * * * *')` continuam agendados, mas retornam na hora
+  sem query quando o sinal está desligado.
+- **Sinal de aviso de grupo**: liga em `aplicarResultado()` (cobre cron 21h/22h, gatilho manual e
+  relay do navegador); desliga quando `despacharAvisosGrupo()` encontra a fila vazia. Aviso que
+  falha há **mais de 24h** (ex: grupo sem `jid`) deixa de ser tentado por minuto e só volta na
+  varredura — senão um aviso travado manteria o banco acordado pra sempre.
+- **Sinal de reservas**: liga em `POST /api/cotas/:id/reservar`; a liberação de expiradas
+  (`liberarReservasExpiradas()`) virou **uma query só** — CTE `WITH liberadas AS (UPDATE ...)`
+  seguido de um SELECT que conta as reservas restantes com cronômetro; zero restantes desliga o
+  sinal. **Pegadinha SQL**: a query externa de um CTE data-modifying NÃO enxerga o UPDATE (mesmo
+  snapshot) — o COUNT exclui os ids recém-liberados via `id NOT IN (SELECT id FROM liberadas)`.
+- **`varreduraSeguranca()`** (cron `0 */6 * * *` + uma vez 20s após o startup): religa os dois
+  sinais e roda os ticks — se o banco confirmar que não há nada, desligam de novo sozinhos. Cobre
+  deploy/restart com trabalho pendente gravado só no banco. Custo quando ocioso: 2 consultas
+  4x/dia (~8/dia no total).
+- `/api/health` (ping do UptimeRobot a cada 5 min) **não** toca o banco — verificado.
+- **Deploy validado em produção**: health OK e o bot **reconectou sozinho** em ~60s (a sessão do
+  Baileys na tabela `wpp_auth` sobrevive a deploys — não precisa de QR novo).
+
 ## REGRA DE TRABALHO estabelecida pelo usuário (19/07/2026)
 
 Ao receber um pedido: **examinar o código primeiro e AVISAR antes de mudar** — dizer se já está
@@ -702,14 +731,20 @@ Render atualiza frontend + backend automaticamente em ~1-3 min.
 
 ## Próximos passos pendentes
 
-1. **Chip brasileiro** — ao voltar ao Brasil: desconectar bot, novo chip, reconectar via QR
-2. **Credenciamento Caixa (SISGEL)** — acesso a notificações de venda em tempo real, tipo ConectaLot
-3. **Push notifications PWA** — pro admin, quando integração Caixa for aprovada
-4. **Domínio personalizado** — `wvstudio3d.com` (subdomínio) ou comprar `apploteriastaguacenter.com`
-5. **Configurar `JWT_SECRET` real no Render** — hoje usa fallback fixo funcional, não é segredo real
-6. **Monitorar campo `resultado.fonte`** — se guidi/loteriascaixa-api pararem de responder do
-   Render, precisa de uma 4ª fonte
-7. **Confirmar versão do Node no Render** — Baileys v7 exige Node ≥20 (`engines` declarado, mas
-   sem acesso ao painel do Render pra confirmar 100% que o serviço já está numa versão compatível)
-8. **Acompanhar estabilidade do Baileys 7.0.0-rc13** (release candidate, não é versão estável
-   final) e quantos apostadores continuam sem nome/telefone resolvido depois de um tempo
+1. **Testar no app publicado** — Home completa como admin, seletor de DDI no login (caso Espanha
+   +34) e sumiço dos "Erro ao salvar" (pós-otimização Neon)
+2. **Tirar do Modo Manutenção** — SÓ com autorização explícita do Wesley (regra registrada)
+3. **Monitorar consumo do Neon** (console.neon.tech → Usage) por 2-4 semanas; se ficar bem abaixo
+   de 100h/mês, avaliar voltar ao plano gratuito
+4. **Trocar as senhas de admin e dev** — ficaram expostas no histórico público do GitHub em 19/07
+5. **Chip brasileiro** — ao voltar ao Brasil: desconectar bot, novo chip, reconectar via QR
+6. **Credenciamento Caixa (SISGEL)** — acesso a notificações de venda em tempo real, tipo ConectaLot
+7. **Push notifications PWA** — pro admin, quando integração Caixa for aprovada
+8. **Domínio personalizado** — `wvstudio3d.com` (subdomínio) ou comprar `apploteriastaguacenter.com`
+9. **Configurar `JWT_SECRET` real no Render** — hoje usa fallback fixo funcional, não é segredo real
+10. **Monitorar campo `resultado.fonte`** — se guidi/loteriascaixa-api pararem de responder do
+    Render, precisa de uma 4ª fonte
+11. **Confirmar versão do Node no Render** — Baileys v7 exige Node ≥20 (`engines` declarado, mas
+    sem acesso ao painel do Render pra confirmar 100% que o serviço já está numa versão compatível)
+12. **Acompanhar estabilidade do Baileys 7.0.0-rc13** (release candidate, não é versão estável
+    final) e quantos apostadores continuam sem nome/telefone resolvido depois de um tempo
