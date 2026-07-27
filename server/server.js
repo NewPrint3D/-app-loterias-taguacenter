@@ -541,6 +541,7 @@ app.post('/api/cotas/:id/reservar', async (req, res) => {
       [req.params.id, String(nome).trim().slice(0, 60), normalizarFoneServidor(fone || '')]
     );
     if (!rows.length) return res.status(409).json({ ok: false, error: 'Essa cota acabou de ser reservada. Escolha outra.' });
+    _haReservasComPrazo = true; // liga o tick de expiração até esta reserva pagar ou expirar
     res.json({ ok: true, cota: rows[0] });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -1904,23 +1905,37 @@ async function aplicarResultado(b, resultadoNorm, fonte) {
     [JSON.stringify(resultado), b.id]
   );
   if (!upd.rowCount) return false; // outra execução já conferiu este bolão nesse meio-tempo
+  _haAvisosPendentes = true; // liga o tick de cada minuto até o aviso do grupo sair
   console.log(`Conferência: bolão "${b.nome}" conferido via "${fonte}" — ${maiorAcerto} acertos, premiado=${premiado}`);
   await enviarAvisoInstantaneoAdmin(b, resultado);
   return true;
 }
 
-// Roda a cada minuto: despacha pro grupo os resultados cujos 5 minutos de exclusividade do
-// lotérico já passaram. Consulta o estado gravado no banco (não memória do processo), então
-// sobrevive normalmente a um restart do servidor no meio da espera.
+// ---- OTIMIZAÇÃO NEON: sinais de trabalho pendente ----
+// Os dois ticks de cada minuto (avisos de grupo e expiração de reservas) consultavam o banco
+// 1.440x/dia mesmo sem nada pra fazer — o Neon nunca dormia e a cota de computação gratuita
+// (100h/mês) estourou. Agora cada tick só toca o banco quando um sinal em memória diz que HÁ
+// trabalho pendente: o sinal liga no ponto que cria o trabalho (conferir bolão, reservar cota)
+// e desliga quando o banco confirma que não sobrou nada. Como um deploy reinicia o processo com
+// trabalho pendente gravado só no banco, a varredura de segurança (4x/dia + 20s após o startup)
+// religa os sinais — ver varreduraSeguranca() mais abaixo.
+let _haAvisosPendentes = false;
+let _haReservasComPrazo = false;
+
+// Despacha pro grupo os resultados cujos 5 minutos de exclusividade do lotérico já passaram.
+// Consulta o estado gravado no banco (não memória do processo), então sobrevive normalmente a
+// um restart do servidor no meio da espera (via varredura de segurança).
 //
 // Só marca avisoGrupoEnviado=true DEPOIS de confirmar que a mensagem realmente saiu — se o bot
 // estiver desconectado ou o grupo não tiver jid, fica pendente e tenta de novo no próximo minuto
-// (marcar antes e falhar depois faria perder o aviso pra sempre, de forma silenciosa).
+// (marcar antes e falhar depois faria perder o aviso pra sempre, de forma silenciosa). Depois de
+// 24h de falhas, o retry passa a ser só na varredura 4x/dia — senão um aviso travado (ex: grupo
+// sem jid pra sempre) manteria o banco acordado indefinidamente.
 // A trava _despachandoAvisos já é suficiente pra evitar envio duplicado (processo único, Node
 // não roda dois ticks de cron em paralelo de verdade) — não precisa de reivindicação via SQL aqui.
 let _despachandoAvisos = false;
 async function despacharAvisosGrupo() {
-  if (_despachandoAvisos) return; // execução anterior ainda rodando (ex: rede lenta) — evita duplicar envio
+  if (_despachandoAvisos || !_haAvisosPendentes) return;
   _despachandoAvisos = true;
   try {
     // Filtra avisoGrupoEnviado=false já no SQL — sem isso a consulta cresceria sem limite
@@ -1929,15 +1944,22 @@ async function despacharAvisosGrupo() {
       `SELECT * FROM boloes WHERE status='conferido' AND (resultado->>'avisoGrupoEnviado')='false'`
     )).rows;
     const agora = Date.now();
+    let restamRecentes = false;
     for (const b of boloes) {
       const resultado = typeof b.resultado === 'string' ? JSON.parse(b.resultado) : b.resultado;
-      if (!resultado.avisoGrupoAgendadoPara || new Date(resultado.avisoGrupoAgendadoPara).getTime() > agora) continue;
+      if (!resultado.avisoGrupoAgendadoPara) continue; // sem agendamento válido — só a varredura volta a tentar
+      const agendadoPara = new Date(resultado.avisoGrupoAgendadoPara).getTime();
+      if (agendadoPara > agora) { restamRecentes = true; continue; } // ainda na espera dos 5 min
       const enviado = await enviarResultadoWhatsApp(b, resultado);
-      if (!enviado) continue; // bot desconectado, grupo sem jid, ou falha no envio — retry no próximo minuto
+      if (!enviado) { // bot desconectado, grupo sem jid, ou falha no envio
+        if (agora - agendadoPara < 24 * 60 * 60 * 1000) restamRecentes = true; // retry por minuto nas primeiras 24h
+        continue;
+      }
       resultado.avisoGrupoEnviado = true;
       await pool.query(`UPDATE boloes SET resultado=$1 WHERE id=$2`, [JSON.stringify(resultado), b.id]);
       console.log(`Conferência: aviso do grupo "${b.grupo}" enviado (bolão "${b.nome}").`);
     }
+    _haAvisosPendentes = restamRecentes;
   } catch (e) {
     console.error('Conferência: erro ao despachar avisos de grupo —', e.message);
   } finally {
@@ -1945,9 +1967,6 @@ async function despacharAvisosGrupo() {
   }
 }
 cron.schedule('* * * * *', despacharAvisosGrupo, { timezone: 'America/Sao_Paulo' });
-// Roda uma vez no startup (com atraso pro bot ter chance de reconectar) — cobre o caso do
-// servidor ter reiniciado no meio da espera de 5 minutos de algum aviso pendente.
-setTimeout(despacharAvisosGrupo, 20000);
 
 async function conferirUmBolao(b) {
   try {
@@ -2019,10 +2038,44 @@ cron.schedule('0 */6 * * *', backfillGrupoMembros, { timezone: 'America/Sao_Paul
 // individual (expira_em) ja passou sem comprovante voltam pra 'livre' sozinhas, ficando disponiveis
 // de novo pros outros apostadores. O lote em si nao fecha por tempo -- so por 'Encerrar agora' do
 // admin ou por esgotar (100% vendido).
-cron.schedule('* * * * *', async () => {
-  try { await pool.query(`UPDATE cotas SET status='livre', nome='', fone='', comprovante=NULL, reservada_em=NULL, expira_em=NULL WHERE status='reservada' AND expira_em < NOW()`); }
-  catch (e) { console.error('Liberação de cotas expiradas:', e.message); }
-}, { timezone: 'America/Sao_Paulo' });
+// Só toca o banco enquanto _haReservasComPrazo indicar reserva ativa (ver bloco OTIMIZAÇÃO NEON).
+// O COUNT de restantes exclui as recém-liberadas explicitamente porque a query externa de um CTE
+// data-modifying enxerga a tabela ANTES do UPDATE (mesmo snapshot).
+async function liberarReservasExpiradas() {
+  if (!_haReservasComPrazo) return;
+  try {
+    const r = await pool.query(
+      `WITH liberadas AS (
+         UPDATE cotas SET status='livre', nome='', fone='', comprovante=NULL, reservada_em=NULL, expira_em=NULL
+         WHERE status='reservada' AND expira_em < NOW() RETURNING id
+       )
+       SELECT
+         (SELECT COUNT(*)::int FROM liberadas) AS liberadas,
+         (SELECT COUNT(*)::int FROM cotas
+           WHERE status='reservada' AND expira_em IS NOT NULL
+             AND id NOT IN (SELECT id FROM liberadas)) AS restantes`
+    );
+    const { liberadas, restantes } = r.rows[0];
+    if (liberadas) console.log(`Cotas ao Vivo: ${liberadas} reserva(s) expirada(s) liberada(s).`);
+    if (!restantes) _haReservasComPrazo = false; // nenhuma reserva com cronômetro — tick volta a dormir
+  } catch (e) { console.error('Liberação de cotas expiradas:', e.message); }
+}
+cron.schedule('* * * * *', liberarReservasExpiradas, { timezone: 'America/Sao_Paulo' });
+
+// ---- Varredura de segurança (OTIMIZAÇÃO NEON) ----
+// Religa os dois sinais e roda os ticks na hora: se o banco confirmar que não há nada pendente,
+// eles desligam de novo sozinhos. Cobre restart do processo (deploy) com trabalho pendente
+// gravado só no banco e avisos travados há mais de 24h. Custo: 2 consultas 4x/dia quando ocioso.
+async function varreduraSeguranca() {
+  _haAvisosPendentes = true;
+  _haReservasComPrazo = true;
+  await despacharAvisosGrupo();
+  await liberarReservasExpiradas();
+}
+cron.schedule('0 */6 * * *', varreduraSeguranca, { timezone: 'America/Sao_Paulo' });
+// Uma vez no startup (com atraso pro bot ter chance de reconectar) — cobre o caso do servidor
+// ter reiniciado no meio da espera de 5 minutos de algum aviso pendente.
+setTimeout(varreduraSeguranca, 20000);
 
 // Gatilho manual — força a conferência sem esperar o cron (retry manual, testes)
 app.post('/api/boloes/conferir', async (req, res) => {
