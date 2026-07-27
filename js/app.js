@@ -35,12 +35,53 @@ function trevosHTML(r) {
 }
 const uid  = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
 // Normaliza telefone para só dígitos, garantindo DDI 55 (ex: 5561999999999)
+// ⚠️ Assume BRASIL — usar apenas em fluxos onde o número já vem com DDI (bot/importação) ou
+// sabidamente BR. Campos digitados pelo usuário devem usar normalizarFoneDDI() com o seletor.
 function normalizarFone(raw) {
   let d = (raw||'').replace(/\D/g,'');
   if (!d) return '';
   if (d.length <= 11) d = '55' + d;
   return d;
 }
+
+// ---- DDI / país do telefone (20/07/2026) ----
+// O sistema diferencia telefone do Brasil e do exterior pelo DDI. Sem o seletor havia
+// ambiguidade real: "34" é a Espanha (DDI) mas também é DDD de Uberlândia/MG.
+const DDIS = [
+  { c:'55',  n:'🇧🇷 +55 Brasil' },
+  { c:'34',  n:'🇪🇸 +34 Espanha' },
+  { c:'351', n:'🇵🇹 +351 Portugal' },
+  { c:'1',   n:'🇺🇸 +1 EUA/Canadá' },
+  { c:'44',  n:'🇬🇧 +44 Reino Unido' },
+  { c:'33',  n:'🇫🇷 +33 França' },
+  { c:'49',  n:'🇩🇪 +49 Alemanha' },
+  { c:'39',  n:'🇮🇹 +39 Itália' },
+  { c:'41',  n:'🇨🇭 +41 Suíça' },
+  { c:'54',  n:'🇦🇷 +54 Argentina' },
+  { c:'595', n:'🇵🇾 +595 Paraguai' },
+  { c:'598', n:'🇺🇾 +598 Uruguai' },
+];
+const ddiOptions = (sel='55') => DDIS.map(d=>`<option value="${d.c}" ${d.c===sel?'selected':''}>${d.n}</option>`).join('');
+const ddiSelect  = (id, sel='55') => `<select id="${id}" class="ddi-sel">${ddiOptions(sel)}</select>`;
+// Junta o DDI escolhido + número digitado (só dígitos). Se a pessoa já digitou o número COM o
+// DDI na frente, não duplica. Quem manda é o país escolhido no seletor.
+function normalizarFoneDDI(ddi, raw) {
+  let d = (raw||'').replace(/\D/g,''); if (!d) return '';
+  ddi = String(ddi||'55').replace(/\D/g,'') || '55';
+  if (d.startsWith(ddi) && (d.length - ddi.length) >= 8) return d; // já veio com DDI
+  return ddi + d;
+}
+// Descobre o DDI de um fone salvo (pra reabrir formulários com o país certo no seletor)
+function ddiDoFone(f) {
+  const d = (f||'').replace(/\D/g,'');
+  for (const x of [...DDIS].sort((a,b)=>b.c.length-a.c.length)) if (d.startsWith(x.c)) return x.c;
+  return '55';
+}
+const foneSemDDI = f => { const d=(f||'').replace(/\D/g,''); const i=ddiDoFone(d); return d.startsWith(i)?d.slice(i.length):d; };
+// Mínimo de dígitos do número local: BR = 10 (DDD+número); exterior = 8 (ex.: Espanha tem 9)
+const foneMinLocal = ddi => (String(ddi)==='55' ? 10 : 8);
+// Preenche o seletor de DDI da tela de login (o select vive no index.html)
+(function(){ const s = document.getElementById('inp-ddi'); if (s) s.innerHTML = ddiOptions('55'); })();
 const WPP_SVG = (size=32) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${size}" height="${size}"><path fill="#25d366" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>`;
 const hoje = () => new Date().toLocaleDateString('pt-BR');
 
@@ -428,7 +469,7 @@ const AUTH = {
     } else {
       const conhecido = AUTH._apostadoresConhecidos()[AUTH._normNome(nome)];
       $('field-telefone').hidden = !!conhecido;
-      if (sub) sub.textContent = conhecido ? 'Bem-vindo de volta! 👋' : 'Informe seu telefone (DDD) para continuar';
+      if (sub) sub.textContent = conhecido ? 'Bem-vindo de volta! 👋' : 'Informe seu telefone para continuar';
     }
     AUTH._atualizarBotaoEntrar();
   },
@@ -443,7 +484,7 @@ const AUTH = {
     if (!AUTH._nomeCompleto(nome)) { btn.disabled = true; return; }
     if (AUTH._apostadoresConhecidos()[AUTH._normNome(nome)]) { btn.disabled = false; return; }
     const digitos = ($('inp-telefone')?.value || '').replace(/\D/g, '');
-    btn.disabled = digitos.length < 10;
+    btn.disabled = digitos.length < foneMinLocal($('inp-ddi')?.value || '55');
   },
 
   // Chama o endpoint de login, guarda o token se der certo, e devolve o JSON mesmo em erro (401/429)
@@ -481,14 +522,15 @@ const AUTH = {
     }
     let fone = AUTH._apostadoresConhecidos()[AUTH._normNome(nome)];
     if (!fone) {
+      const ddi = $('inp-ddi')?.value || '55';
       const digitado = ($('inp-telefone')?.value || '').trim();
-      if (digitado.replace(/\D/g,'').length < 10) {
+      if (digitado.replace(/\D/g,'').length < foneMinLocal(ddi)) {
         err.hidden=false;
-        err.textContent='Informe seu telefone com DDD para continuar.';
+        err.textContent = ddi==='55' ? 'Informe seu telefone com DDD para continuar.' : 'Informe seu telefone completo para continuar.';
         $('inp-telefone')?.focus();
         return;
       }
-      fone = normalizarFone(digitado);
+      fone = normalizarFoneDDI(ddi, digitado);
     }
     AUTH._lembrarApostador(nome, fone);
     _api.post('/api/usuarios/registrar', { id:'ap_'+fone, nome, criado:hoje(), fone });
@@ -851,42 +893,12 @@ const R = {
   // ---- HOME ----
   _home() {
     $('h-title').innerHTML='<img src="img/logo.png" alt="Lotérica Taguacenter" class="h-logo-img">';
-    // Dev vê a Home COMPLETA do apostador (Bolões Ativos, resultados, planilha do Bolão Anual,
-    // Palpiteiro) com os atalhos de gestão do admin embutidos — pra ajustar qualquer coisa
-    // enxergando o app inteiro. Admin mantém a Home de gestão enxuta.
-    if (S.user.role === 'admin') {
-      R._homeAdmin();
-    } else {
-      R._homeUser();
-    }
-  },
-
-  async _homeAdmin() {
-    $('view-home').innerHTML=`
-      <div style="margin-bottom:14px">
-        <div style="font-size:1.15rem;font-weight:700">Olá, ${S.user.nome.split(' ')[0]}! 👋</div>
-        <div class="muted tsm">Resultados ao vivo — gerencie os grupos na aba Grupos</div>
-      </div>
-      <div class="grid-lt">
-        ${Object.values(LOTERIAS).map(lt=>{
-          return`<div class="lt-card" style="background:linear-gradient(135deg,${lt.cor},${lt.cor2})${lt.corTexto?`;--lt-txt:${lt.corTexto};--lt-shadow:none`:''}" onclick="R._ltClick('${lt.id}')">
-            <div id="ld-${lt.id}" class="lt-dados-live"><div class="lt-loading-dot"></div></div>
-            <div class="lt-nome">${lt.nome}</div>
-          </div>`;
-        }).join('')}
-      </div>
-      ${R._anualHomeCard()}`;
-
-    await Promise.allSettled(Object.values(LOTERIAS).map(async lt=>{
-      const {dados}=await API.ultimos3(lt.id);
-      const r=dados[0]; const el=$(`ld-${lt.id}`); if(!el) return;
-      if(!r){el.innerHTML='';return;}
-      const p=r.prox||r.premio||0;
-      el.innerHTML=`${r.acumulado?'<span class="lt-acum">ACUMULADO</span>':''}
-        ${p?`<div class="lt-premio">${fmtPremio(p)}</div>`:''}
-        ${r.numProxConcurso?`<div class="lt-data-card">Conc. #${r.numProxConcurso}</div>`:''}
-        ${r.dataProxConcurso?`<div class="lt-data-card">📅 ${r.dataProxConcurso}</div>`:''}`;
-    }));
+    // TODOS os perfis veem a MESMA Home completa (pedido do usuário, 20/07/2026): Bolões
+    // Ativos, loterias ao vivo, planilha do Bolão Anual, último resultado, números quentes/
+    // frios e Palpiteiro — admin e dev precisam enxergar exatamente o que o apostador vê pra
+    // saber o que está acontecendo. A antiga Home "enxuta" do admin (_homeAdmin) foi removida.
+    // Diferença por perfil: só o DESTINO do card de cotas (admin → gestão de lotes).
+    R._homeUser();
   },
 
   async _homeUser() {
@@ -901,10 +913,10 @@ const R = {
         <div class="ug-nome">${saud}, <strong>${nome}</strong>! 👋</div>
       </div>
 
-      <div id="boloes-ativos-card" class="boloes-ativos-card" onclick="R.ir('cotas')">
+      <div id="boloes-ativos-card" class="boloes-ativos-card" onclick="R.ir(S.user.role==='admin'?'lotes':'cotas')">
         <div class="bac-emoji">🧾</div>
         <div class="bac-info">
-          <div class="bac-titulo">Comprar cotas de bolões ativos</div>
+          <div class="bac-titulo">${S.user.role==='admin'?'Bolões ativos (Cotas ao Vivo)':'Comprar cotas de bolões ativos'}</div>
           <div class="bac-sub" id="bac-sub">Carregando…</div>
         </div>
         <span class="bac-seta">›</span>
@@ -1268,6 +1280,12 @@ const R = {
       part.className = 'minha-participacao';
       part.onclick = () => R.ir('cotas');
       part.innerHTML = '🧾 Você tem a cota #' + minha.numero + ' em <strong>' + COTAS._esc(loteMinha.nome) + '</strong> — ' + statusTxt;
+    } else if (S.user.role === 'admin') {
+      part.className = 'sem-participacao';
+      part.onclick = () => R.ir('lotes');
+      part.innerHTML = ativos.length
+        ? '🛠️ Bolão relâmpago rodando agora — toque para acompanhar as cotas ao vivo.'
+        : '🛠️ Nenhum bolão relâmpago no ar — toque para criar um novo lote.';
     } else {
       part.className = 'sem-participacao';
       part.onclick = () => R.ir('cotas');
@@ -1711,7 +1729,7 @@ const R = {
   _mAddRosterManual(grupoId) {
     MODAL.open(`<div class="m-title">➕ Adicionar apostador</div>
       <div class="fg"><label>Nome</label><input id="rmn" type="text" placeholder="Nome completo"></div>
-      <div class="fg"><label>Telefone (opcional)</label><input id="rmf" type="text" placeholder="+55 61 99999-9999"></div>
+      <div class="fg"><label>Telefone (opcional)</label><div class="fone-row">${ddiSelect('rmf-ddi')}<input id="rmf" type="text" placeholder="61 99999-9999"></div></div>
       <input type="hidden" id="rmg" value="${grupoId}">
       <button class="btn btn-p btn-f" onclick="R._saveRosterManual()">Salvar</button>`);
   },
@@ -1720,7 +1738,7 @@ const R = {
     const semNome = !m.nome || m.nome.trim().toLowerCase()==='sem nome';
     MODAL.open(`<div class="m-title">✏️ Editar apostador</div>
       <div class="fg"><label>Nome</label><input id="rmn" type="text" value="${semNome?'':m.nome}" placeholder="${semNome?'Ainda não identificado — digite o nome':''}"></div>
-      <div class="fg"><label>Telefone (opcional)</label><input id="rmf" type="text" value="${m.fone||''}"></div>
+      <div class="fg"><label>Telefone (opcional)</label><div class="fone-row">${ddiSelect('rmf-ddi', ddiDoFone(m.fone))}<input id="rmf" type="text" value="${foneSemDDI(m.fone)}"></div></div>
       <input type="hidden" id="rmg" value="${m.grupo_id}">
       <input type="hidden" id="rmid" value="${m.id}">
       <button class="btn btn-p btn-f" onclick="R._saveRosterManual()">Salvar</button>`);
@@ -1729,7 +1747,7 @@ const R = {
     const nomeInput=$('rmn')?.value?.trim();
     const idPrevio=$('rmid')?.value;
     const grupoId=$('rmg').value;
-    const fone=normalizarFone($('rmf')?.value||'');
+    const fone=($('rmf')?.value||'').trim() ? normalizarFoneDDI($('rmf-ddi')?.value, $('rmf').value) : '';
     const existente=idPrevio && (S.cache.grupoMembros||[]).find(x=>x.id===idPrevio);
     if(!nomeInput && !existente){alert('Informe o nome.');return;} // editar sem digitar preserva "Sem nome"/placeholder
     const nome = nomeInput || (existente?existente.nome:'Sem nome');
@@ -2127,14 +2145,14 @@ const R = {
   _mNovoUser() {
     MODAL.open(`<div class="m-title">👤 Novo Apostador</div>
       <div class="fg"><label>Nome completo</label><input id="mun" type="text" placeholder="Ex: João Silva" autocomplete="off"></div>
-      <div class="fg"><label>Telefone (opcional)</label><input id="mutel" type="tel" placeholder="61999887766"></div>
+      <div class="fg"><label>Telefone (opcional)</label><div class="fone-row">${ddiSelect('mutel-ddi')}<input id="mutel" type="tel" placeholder="61999887766"></div></div>
       <button class="btn btn-p btn-f" onclick="R._saveUser()">Cadastrar</button>`);
   },
   _saveUser() {
     const nome = $('mun')?.value?.trim();
     if (!nome) { alert('Informe o nome.'); return; }
     if (DB.usuarios.find(nome)) { alert('Já existe um usuário com esse nome.'); return; }
-    const fone = $('mutel')?.value?.trim()||'';
+    const fone = ($('mutel')?.value?.trim()) ? normalizarFoneDDI($('mutel-ddi')?.value, $('mutel').value) : '';
     DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje(), fone });
     MODAL.close(); R._usuarios();
   },
@@ -2207,7 +2225,7 @@ const R = {
         <input id="pr-nome" list="dl-apostadores" placeholder="Nome completo" oninput="R._premAutoFone(this.value)">
         <datalist id="dl-apostadores">${dl}</datalist>
       </div>
-      <div class="fg mb8"><label>Telefone (DDD)</label><input id="pr-fone" type="tel" placeholder="(61) 99999-9999"></div>
+      <div class="fg mb8"><label>Telefone</label><div class="fone-row">${ddiSelect('pr-ddi')}<input id="pr-fone" type="tel" placeholder="(61) 99999-9999"></div></div>
       <div class="fg mb8"><label>Valor do prêmio (R$)</label><input id="pr-valor" type="number" step="0.01" placeholder="0,00"></div>
       <div class="fg mb8"><label>Mensagem (opcional)</label><input id="pr-msg" placeholder="Ex: Acertou 4 dezenas na Lotofácil"></div>
       <button class="btn btn-p btn-f mt8" onclick="R._salvarPremiacao()">🏆 Cadastrar premiação</button>
@@ -2216,17 +2234,21 @@ const R = {
   },
   _premAutoFone(nome) {
     const u = DB.usuarios.find((nome||'').trim());
-    if (u && u.fone) $('pr-fone').value = u.fone;
+    if (u && u.fone) {
+      $('pr-fone').value = foneSemDDI(u.fone);
+      if ($('pr-ddi')) $('pr-ddi').value = ddiDoFone(u.fone);
+    }
   },
   _salvarPremiacao() {
     const nome = $('pr-nome').value.trim();
+    const ddi = $('pr-ddi')?.value || '55';
     const foneDigitado = $('pr-fone').value.trim();
     const valor = +$('pr-valor').value || 0;
     const mensagem = $('pr-msg').value.trim();
     if (!nome) { TOAST.show('Informe o nome do apostador.', 'err'); return; }
-    if (foneDigitado.replace(/\D/g,'').length < 10) { TOAST.show('Informe um telefone válido com DDD.', 'err'); return; }
+    if (foneDigitado.replace(/\D/g,'').length < foneMinLocal(ddi)) { TOAST.show('Informe um telefone válido.', 'err'); return; }
     if (valor <= 0) { TOAST.show('Informe o valor do prêmio.', 'err'); return; }
-    const fone = normalizarFone(foneDigitado);
+    const fone = normalizarFoneDDI(ddi, foneDigitado);
     DB.premiacoes.save({ id:uid(), nome, fone, valor, mensagem, confirmada:false, criado:hoje() });
     MODAL.close();
     R._premiacao();
@@ -2459,20 +2481,24 @@ const R = {
       <div class="m-title">👤 Novo participante</div>
       <div class="fg"><label>Nome completo</label><input id="ap-nome" list="dl-ap-anual" placeholder="Nome completo" oninput="R._anAutoFone(this.value)">
       <datalist id="dl-ap-anual">${dl}</datalist></div>
-      <div class="fg"><label>Telefone (DDD)</label><input id="ap-fone" type="tel" placeholder="(61) 99999-9999"></div>
+      <div class="fg"><label>Telefone</label><div class="fone-row">${ddiSelect('ap-ddi')}<input id="ap-fone" type="tel" placeholder="(61) 99999-9999"></div></div>
       <button class="btn btn-p btn-f mt8" onclick="R._salvarParticipanteAnual()">Adicionar</button>
     `);
   },
   _anAutoFone(nome) {
     const u = DB.usuarios.find((nome||'').trim());
-    if (u && u.fone) $('ap-fone').value = u.fone;
+    if (u && u.fone) {
+      $('ap-fone').value = foneSemDDI(u.fone);
+      if ($('ap-ddi')) $('ap-ddi').value = ddiDoFone(u.fone);
+    }
   },
   _salvarParticipanteAnual() {
     const nome = $('ap-nome').value.trim();
+    const ddi = $('ap-ddi')?.value || '55';
     const foneDigitado = $('ap-fone').value.trim();
     if (!nome) { TOAST.show('Informe o nome.', 'err'); return; }
-    if (foneDigitado.replace(/\D/g,'').length < 10) { TOAST.show('Informe um telefone válido com DDD.', 'err'); return; }
-    DB.boloesParcelados.salvarParticipante({ id:uid(), bolao_parcelado_id:S.anualAtual, nome, fone:normalizarFone(foneDigitado) });
+    if (foneDigitado.replace(/\D/g,'').length < foneMinLocal(ddi)) { TOAST.show('Informe um telefone válido.', 'err'); return; }
+    DB.boloesParcelados.salvarParticipante({ id:uid(), bolao_parcelado_id:S.anualAtual, nome, fone:normalizarFoneDDI(ddi, foneDigitado) });
     MODAL.close();
     R._renderAnualDet();
     TOAST.show('👤 Participante adicionado!', 'ok');
@@ -3276,7 +3302,7 @@ const R = {
         <h3>🔔 Aviso Instantâneo de Resultado</h3>
         <p class="txs muted mb8">Seu WhatsApp pessoal — recebe o resultado de cada bolão assim que o
         sistema confere, <strong>5 minutos antes</strong> do grupo. Precisa do bot conectado.</p>
-        <div class="fg"><label>Seu número (com DDD)</label><input id="dev-fone" placeholder="61999999999" value="${c.admin_fone||''}"></div>
+        <div class="fg"><label>Seu número</label><div class="fone-row">${ddiSelect('dev-ddi', ddiDoFone(c.admin_fone))}<input id="dev-fone" placeholder="61999999999" value="${foneSemDDI(c.admin_fone)}"></div></div>
         <button class="btn btn-p btn-sm" onclick="DEV.saveFoneAdmin()">Salvar número</button>
       </div>
       <div class="dev-panel">
@@ -4253,14 +4279,14 @@ const DEV = {
       <p class="txs muted mb8">Preencha com o nome/telefone de um apostador de verdade pra ver as
       premiações, o bolão anual e as cotas DELE — ou deixe como está pra um apostador genérico.</p>
       <div class="fg mb8"><label>Nome</label><input id="sim-nome" value="Apostador Teste"></div>
-      <div class="fg mb8"><label>Telefone (opcional — com DDD)</label><input id="sim-fone" placeholder="61999999999"></div>
+      <div class="fg mb8"><label>Telefone (opcional)</label><div class="fone-row">${ddiSelect('sim-ddi')}<input id="sim-fone" placeholder="61999999999"></div></div>
       <button class="btn btn-p btn-f" onclick="DEV._simApostador()">Entrar na visão do apostador</button>`);
   },
   _simApostador() {
     const nome=$('sim-nome').value.trim()||'Apostador Teste';
     const fone=$('sim-fone').value.trim();
     MODAL.close();
-    DEV._iniciarSimulacao({ role:'cliente', nome, fone: fone?normalizarFone(fone):'' });
+    DEV._iniciarSimulacao({ role:'cliente', nome, fone: fone?normalizarFoneDDI($('sim-ddi')?.value, fone):'' });
   },
   _iniciarSimulacao(user) {
     S.devBackup = S.user;
@@ -4300,11 +4326,15 @@ const DEV = {
   },
   saveFoneAdmin() {
     const bruto = $('dev-fone')?.value||'';
-    const fone = normalizarFone(bruto);
-    // Celular BR com DDI: 13 dígitos (5561999999999). Fixo: 12. Fora disso, o número digitado
-    // provavelmente está incompleto/errado e o aviso instantâneo vai falhar silenciosamente.
-    if (fone && fone.length!==12 && fone.length!==13) {
-      if (!confirm(`"${bruto}" não parece um número completo com DDD (ficou "${fone}"). Salvar assim mesmo?`)) return;
+    const ddi = $('dev-ddi')?.value || '55';
+    const fone = bruto.trim() ? normalizarFoneDDI(ddi, bruto) : '';
+    // BR: celular com DDI = 13 dígitos (5561999999999), fixo 12. Exterior: valida só o mínimo
+    // local (ex.: Espanha +34 com 9 dígitos = 11 no total). Fora disso, o número provavelmente
+    // está incompleto e o aviso instantâneo vai falhar silenciosamente.
+    const invalido = ddi==='55' ? (fone && fone.length!==12 && fone.length!==13)
+                                : (fone && (fone.length - ddi.length) < foneMinLocal(ddi));
+    if (invalido) {
+      if (!confirm(`"${bruto}" não parece um número completo (ficou "${fone}"). Salvar assim mesmo?`)) return;
     }
     const c=DB.ctrl.get(); c.admin_fone=fone; DB.ctrl.set(c);
     alert(c.admin_fone ? 'Número salvo! Você passa a receber o resultado 5 min antes do grupo.' : 'Número removido — só o grupo vai receber o resultado.');

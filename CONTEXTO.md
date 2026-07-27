@@ -58,6 +58,39 @@ server/schema.sql   — schema das tabelas Neon (referência)
 > devolve um **token JWT** (24h, renovação deslizante — aumentado de 1h em 09/07/2026). Nunca colar
 > essas senhas em documentos públicos/apresentações.
 
+## Home única para todos os perfis (20/07/2026)
+
+Pedido do usuário: a Home do admin estava "enxuta" (só grade de loterias + card Bolão Anual),
+diferente da do apostador/dev — e admin e dev precisam ver exatamente o que o apostador vê pra
+saber o que está acontecendo.
+
+- `R._home()` agora SEMPRE chama `_homeUser()` — a `_homeAdmin()` foi removida.
+- Todos os perfis veem: card Bolões Ativos, loterias ao vivo, planilha do Bolão Anual (vazia ou
+  não), último resultado, números quentes/frios e botão do Palpiteiro.
+- Única diferença por perfil é o DESTINO do card de cotas: admin → `lotes` (gestão, com título
+  "Bolões ativos (Cotas ao Vivo)" e a faixa de baixo virando atalho de criar/acompanhar lote);
+  apostador e dev → `cotas` (visão de compra). Dev mantém a visão do apostador de propósito.
+
+## Telefones com DDI — seletor de país (20/07/2026)
+
+O sistema diferencia telefone do Brasil e do exterior pelo DDI, mas os campos só aceitavam
+número local BR (prefixo 55 automático). Ambiguidade real: **"34" é o DDI da Espanha e também o
+DDD de Uberlândia/MG** — o dono usa número espanhol.
+
+- **Seletor de DDI** (`ddiSelect`/`DDIS` em `js/app.js`, CSS `.fone-row`/`.ddi-sel`) em TODOS os
+  campos de telefone digitado: login do cliente (`inp-ddi` no index.html, populado no boot),
+  Novo Apostador (`mutel-ddi`), apostador do grupo (`rmf-ddi`, add+editar), Premiação (`pr-ddi`),
+  participante do Bolão Anual (`ap-ddi`), número mestre do dev (`dev-ddi`) e Testar como
+  apostador (`sim-ddi`). Padrão 🇧🇷 +55; Espanha e mais 10 países na lista.
+- **`normalizarFoneDDI(ddi, raw)`**: junta DDI escolhido + dígitos; não duplica se a pessoa já
+  digitou com DDI. `ddiDoFone`/`foneSemDDI` reabrem formulários com o país certo no seletor.
+  `foneMinLocal(ddi)`: validação mínima (BR 10 dígitos; exterior 8 — Espanha tem 9).
+- **`normalizarFone()` antiga continua** para fluxos que já vêm com DDI (jid do bot, importações)
+  — comentada como "assume Brasil, não usar em campo digitado".
+- **Servidor** (`normalizarFoneServidor`): preserva 12+ dígitos (já tem DDI) e o caso Espanha de
+  11 dígitos ("34..." sem ser "349..." — celular BR pós-DDD começa com 9, espanhol com 6/7);
+  resto ≤11 dígitos ganha 55 (compatibilidade com clientes antigos).
+
 ## Loterias suportadas
 
 | Loteria       | Dezenas | Max | Preço  | Formato especial |

@@ -19,10 +19,19 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// Normaliza telefone pra só dígitos com DDI 55 (espelha normalizarFone() do frontend)
+// Normaliza telefone pra só dígitos com DDI (20/07/2026).
+// O frontend novo já envia o número COM DDI (seletor de país no app) — a regra aqui é
+// conservadora, só pra clientes antigos que ainda mandam número local BR sem DDI:
+// - 12+ dígitos: já tem DDI (BR completo = 12-13; internacional = 11-13) → preserva.
+// - Exatamente 11 dígitos começando com "34" e SEM "349": Espanha (+34) → preserva.
+//   (Celular BR depois do DDD sempre começa com 9, então "349..." é DDD 34 de Uberlândia;
+//   celular espanhol começa com 6/7 → "346/347..." é Espanha, sem ambiguidade.)
+// - Resto com até 11 dígitos: número local BR → prefixa 55 (comportamento antigo).
 function normalizarFoneServidor(raw) {
   let d = String(raw || '').replace(/\D/g, '');
   if (!d) return '';
+  if (d.length >= 12) return d;
+  if (d.length === 11 && d.startsWith('34') && !d.startsWith('349')) return d; // Espanha
   if (d.length <= 11) d = '55' + d;
   return d;
 }

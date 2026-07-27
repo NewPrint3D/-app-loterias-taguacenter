@@ -76,6 +76,17 @@ body {
 .field input:focus { border-color: var(--primary); }
 .erro { color: var(--red); font-size: .83rem; margin-top: 8px; }
 
+/* ---- TELEFONE COM DDI (seletor de país) ---- */
+.fone-row { display: flex; gap: 8px; }
+.fone-row input { flex: 1; min-width: 0; }
+.ddi-sel {
+  flex: 0 0 118px; max-width: 118px; padding: 10px 6px;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--rsm); color: var(--text); font-size: .8rem; outline: none;
+}
+.ddi-sel:focus { border-color: var(--primary); }
+.ddi-sel option { background: var(--bg2); }
+
 /* ---- SHELL ---- */
 #shell { display: flex; flex-direction: column; min-height: 100dvh; }
 #header {

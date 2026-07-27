@@ -37,9 +37,12 @@
     </div>
 
     <div class="field" id="field-telefone" hidden>
-      <label>Seu telefone (DDD)</label>
-      <input id="inp-telefone" type="tel" placeholder="Ex: (61) 99999-9999" autocomplete="off"
-             oninput="AUTH.onTelefoneInput()" onkeydown="if(event.key==='Enter')AUTH.entrar()">
+      <label>Seu telefone</label>
+      <div class="fone-row">
+        <select id="inp-ddi" class="ddi-sel" onchange="AUTH.onTelefoneInput()"></select>
+        <input id="inp-telefone" type="tel" placeholder="Ex: (61) 99999-9999" autocomplete="off"
+               oninput="AUTH.onTelefoneInput()" onkeydown="if(event.key==='Enter')AUTH.entrar()">
+      </div>
     </div>
 
     <div class="field" id="field-senha" hidden>
