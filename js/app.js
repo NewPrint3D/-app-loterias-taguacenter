@@ -2995,6 +2995,9 @@ const R = {
       </div>
       <button class="btn btn-o btn-f mt12 mb16" onclick="R._mNovoGrp()">+ Adicionar Grupo</button>
       <div class="divider"></div>
+      <div class="sectt mb8">🔗 Vincular grupos ao bot</div>
+      <div id="vinc-wrap" class="mb16"><div class="loading"><div class="spinner"></div></div></div>
+      <div class="divider"></div>
       <div class="fxb mb8">
         <div class="sectt">Cadastro Automático</div>
         <span id="cad-badge"></span>
@@ -3076,6 +3079,9 @@ const R = {
     WPP.aoTrocarLt($('wlt')?.value || 'megasena');
     WPP.setDest(WPP._dest, document.querySelector('.dtab.on'));
     WPP._atualizarCadastroStatus(); // carrega status do cadastro automático
+    // Vinculação grupo↔bot direto na tela do admin — o lotérico cadastra/apaga grupos e vincula
+    // sozinho, sem depender do dev (conectar/desconectar o bot continua só no Controle Dev).
+    BOT.renderVinculacoes().then(h => { const el=$('vinc-wrap'); if (el) el.innerHTML = h; });
   },
 
   _mNovoGrp() {
@@ -3583,25 +3589,43 @@ const BOT = {
     }[s] || '<span class="muted">—</span>';
   },
 
-  async renderPainel() {
+  // Lista grupos do app × grupos do bot pra vincular — compartilhada entre o Controle Dev e a
+  // tela WhatsApp do admin: o lotérico cadastra/apaga grupos e vincula sozinho, sem depender do
+  // dev. Conectar/desconectar o bot continua exclusivo do Controle Dev.
+  async renderVinculacoes() {
     const d = await BOT.verificarStatus();
     const gruposDB = DB.grupos.list();
-    const botGrps = d.status === 'conectado' ? (await BOT.listarGrupos()).grupos || [] : [];
+    if (!gruposDB.length) return `<p class="muted txs">Nenhum grupo cadastrado ainda — adicione um grupo acima primeiro.</p>`;
+    if (d.status !== 'conectado') return `<p class="muted txs">🤖 O bot do WhatsApp está desconectado no momento — peça ao desenvolvedor para conectá-lo. Assim que estiver conectado, os grupos aparecem aqui pra vincular.</p>`;
+    const botGrps = (await BOT.listarGrupos()).grupos || [];
+    return `
+      <p class="muted txs mb12">Adicione o número do bot em cada grupo WhatsApp, depois selecione abaixo para vincular:</p>
+      ${gruposDB.map(gDB => `
+        <div class="card mb8" style="padding:12px">
+          <div style="font-weight:600;margin-bottom:4px">${gDB.nome}</div>
+          <div class="txs muted mb8">${gDB.jid ? `✅ Vinculado` : '⚪ Não vinculado'}</div>
+          <select onchange="BOT.vincularGrupoUI('${gDB.id}',this.value)"
+                  style="width:100%;font-size:.8rem;padding:6px;border-radius:8px;background:var(--card);color:var(--text);border:1px solid var(--border)">
+            <option value="">— Selecionar grupo do bot —</option>
+            ${botGrps.map(gb => `<option value="${gb.jid}" ${gDB.jid===gb.jid?'selected':''}>${gb.nome} (${gb.membros} membros)</option>`).join('')}
+          </select>
+        </div>`).join('')}`;
+  },
+  // Vincula e re-renderiza o lugar certo: a tela WhatsApp inteira (atualiza também o badge
+  // "Bot ✓" nos cards de grupo) ou o painel do bot no Controle Dev.
+  async vincularGrupoUI(grupoId, jid) {
+    await BOT.vincularGrupo(grupoId, jid);
+    if (S.tela === 'whatsapp') { R._whatsapp(); return; }
+    BOT.renderPainel().then(h => { const el = $('bot-wrap'); if (el) el.innerHTML = h; });
+  },
 
-    const vinculacoes = gruposDB.length ? `
+  async renderPainel() {
+    const d = await BOT.verificarStatus();
+
+    const vinculacoes = DB.grupos.list().length ? `
       <div class="dev-panel mt12">
         <h3>🔗 Vincular Grupos</h3>
-        <p class="muted txs mb12">Adicione o número do bot em cada grupo WhatsApp, depois selecione abaixo para vincular:</p>
-        ${gruposDB.map(gDB => `
-          <div class="card mb8" style="padding:12px">
-            <div style="font-weight:600;margin-bottom:4px">${gDB.nome}</div>
-            <div class="txs muted mb8">${gDB.jid ? `✅ Vinculado` : '⚪ Não vinculado'}</div>
-            <select onchange="BOT.vincularGrupo('${gDB.id}',this.value).then(()=>BOT.renderPainel().then(h=>{$('bot-wrap').innerHTML=h;}))"
-                    style="width:100%;font-size:.8rem;padding:6px;border-radius:8px;background:var(--card);color:var(--text);border:1px solid var(--border)">
-              <option value="">— Selecionar grupo do bot —</option>
-              ${botGrps.map(gb => `<option value="${gb.jid}" ${gDB.jid===gb.jid?'selected':''}>${gb.nome} (${gb.membros} membros)</option>`).join('')}
-            </select>
-          </div>`).join('')}
+        ${await BOT.renderVinculacoes()}
       </div>` : '';
 
     return `
