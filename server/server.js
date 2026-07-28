@@ -527,6 +527,23 @@ app.put('/api/lotes/:id/encerrar', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Admin corrige dados de um lote criado errado (nome/concurso/valor/prazo por reserva). O total
+// de cotas fica de fora de propósito: as cotas já existem (podendo estar reservadas/pagas) —
+// mudar o total criaria inconsistência; o caminho é excluir o lote e criar outro. O novo
+// duracao_min só vale pras próximas reservas (as ativas mantêm o expira_em já gravado).
+app.put('/api/lotes/:id', async (req, res) => {
+  const { nome, concurso, valor_cota, duracao_min } = req.body || {};
+  if (!nome || !String(nome).trim()) return res.status(400).json({ ok: false, error: 'Informe o nome.' });
+  try {
+    const { rows } = await pool.query(
+      `UPDATE lotes SET nome=$2, concurso=$3, valor_cota=$4, duracao_min=$5 WHERE id=$1 RETURNING *`,
+      [req.params.id, String(nome).trim().slice(0, 80), parseInt(concurso) || 0, +valor_cota || 0, Math.max(1, parseInt(duracao_min) || 30)]
+    );
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'Lote não encontrado.' });
+    res.json({ ok: true, lote: rows[0] });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // PÚBLICA — cliente reserva a cota. Atômico: só pega se ainda estiver 'livre' e o lote ativo/no prazo.
 app.post('/api/cotas/:id/reservar', async (req, res) => {
   const { nome, fone } = req.body;
@@ -658,7 +675,8 @@ app.post('/api/premiacoes', async (req, res) => {
   if (!nome || !fone) return res.status(400).json({ ok: false, error: 'Informe nome e telefone.' });
   try {
     await pool.query(
-      `INSERT INTO premiacoes(id,nome,fone,valor,mensagem,confirmada,criado) VALUES($1,$2,$3,$4,$5,false,NOW())`,
+      `INSERT INTO premiacoes(id,nome,fone,valor,mensagem,confirmada,criado) VALUES($1,$2,$3,$4,$5,false,NOW())
+       ON CONFLICT(id) DO UPDATE SET nome=$2,fone=$3,valor=$4,mensagem=$5`,
       [id, String(nome).trim().slice(0, 80), normalizarFoneServidor(fone), +valor || 0, mensagem || '']
     );
     res.json({ ok: true });
@@ -704,7 +722,8 @@ app.post('/api/boloes-parcelados', async (req, res) => {
   try {
     await pool.query(
       `INSERT INTO boloes_parcelados(id,nome,ano,valor_mensal,duracao_meses,valor_total,status,criado)
-       VALUES($1,$2,$3,$4,$5,$6,'ativo',NOW())`,
+       VALUES($1,$2,$3,$4,$5,$6,'ativo',NOW())
+       ON CONFLICT(id) DO UPDATE SET nome=$2,ano=$3,valor_mensal=$4,duracao_meses=$5,valor_total=$6`,
       [id, String(nome).trim().slice(0, 80), +ano, +valor_mensal || 0, +duracao_meses || 12, +valor_total || 0]
     );
     res.json({ ok: true });
@@ -724,7 +743,8 @@ app.post('/api/bolao-parcelado-participantes', async (req, res) => {
   try {
     await pool.query(
       `INSERT INTO bolao_parcelado_participantes(id,bolao_parcelado_id,nome,fone,ativo,criado)
-       VALUES($1,$2,$3,$4,true,NOW())`,
+       VALUES($1,$2,$3,$4,true,NOW())
+       ON CONFLICT(id) DO UPDATE SET nome=$3,fone=$4`,
       [id, bolao_parcelado_id, String(nome).trim().slice(0, 80), normalizarFoneServidor(fone)]
     );
     res.json({ ok: true });

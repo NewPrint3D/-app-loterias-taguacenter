@@ -322,7 +322,8 @@ const DB = {
   premiacoes: {
     list: ()  => S.cache.premiacoes || [],
     minhas: () => (S.cache.premiacoes||[]).filter(p => p.fone === S.user?.fone),
-    save: p   => { S.cache.premiacoes.unshift(p); _api.post('/api/premiacoes',p); },
+    // Upsert no cache: editar uma premiação existente substitui a linha em vez de duplicar
+    save: p   => { const l=S.cache.premiacoes; const i=l.findIndex(x=>x.id===p.id); i>=0?l[i]=p:l.unshift(p); _api.post('/api/premiacoes',p); },
     // Confirmar é rota própria pública (o apostador não tem token) — a de criação é protegida (admin).
     confirmar: id => {
       const p = S.cache.premiacoes.find(x=>x.id===id); if (p) { p.confirmada=true; p.confirmada_em=new Date().toISOString(); }
@@ -359,7 +360,13 @@ const DB = {
       }
       return out;
     },
-    save: b   => { S.cache.boloesParcelados.unshift({ ...b, participantes:[] }); _api.post('/api/boloes-parcelados', b); },
+    // Upsert no cache: editar um bolão existente atualiza a linha (preservando participantes);
+    // só bolão novo entra com participantes vazios
+    save: b   => {
+      const l=S.cache.boloesParcelados; const i=l.findIndex(x=>x.id===b.id);
+      i>=0 ? l[i]=b : l.unshift({ ...b, participantes:[] });
+      _api.post('/api/boloes-parcelados', b);
+    },
     del:  id  => { S.cache.boloesParcelados=S.cache.boloesParcelados.filter(b=>b.id!==id); _api.del('/api/boloes-parcelados/'+id); },
     salvarParticipante: p => {
       const b = S.cache.boloesParcelados.find(x=>x.id===p.bolao_parcelado_id);
@@ -1533,7 +1540,7 @@ const R = {
             : `<span class="badge b-${b.status==='ativo'?'ativo':'pend'}">${b.status}</span>`}
         </div>
         <div class="bl-row mt8"><span class="txs muted">${pg}/${b.membros.length} pagos</span><span class="txs muted">${b.numeros.length} jogo${b.numeros.length!==1?'s':''}</span></div>
-        ${admin?`<button class="btn-ico bl-del-btn" title="Excluir bolão" onclick="event.stopPropagation();R._delBolao('${b.id}','${b.nome.replace(/'/g,"\\'")}')">🗑️</button>`:''}
+        ${admin?`<button class="btn-ico bl-edit-btn" title="Editar bolão" onclick="event.stopPropagation();R._mEditBolao('${b.id}')">✏️</button><button class="btn-ico bl-del-btn" title="Excluir bolão" onclick="event.stopPropagation();R._delBolao('${b.id}','${b.nome.replace(/'/g,"\\'")}')">🗑️</button>`:''}
       </div>`;
     }).join('');
     $('view-boloes').innerHTML=h;
@@ -1589,6 +1596,30 @@ const R = {
   _delBolao(id, nome) {
     if(!confirm(`Excluir o bolão "${nome}"?\n\nTodos os membros e pagamentos vinculados também serão removidos. Esta ação não pode ser desfeita.`)) return;
     DB.boloes.del(id); R._boloes();
+  },
+  // Corrige dados de um bolão criado errado. Os jogos/dezenas e o grupo ficam de fora de
+  // propósito — pra esses, o caminho é excluir e criar de novo.
+  _mEditBolao(id) {
+    const b=DB.boloes.get(id); if(!b) return;
+    MODAL.open(`<div class="m-title">✏️ Editar Bolão</div>
+      <div class="fg"><label>Nome do bolão</label><input id="ebn" type="text" value="${COTAS._esc(b.nome)}"></div>
+      <div class="fr">
+        <div class="fg"><label>Nº do concurso</label><input id="ebc" type="number" value="${b.concurso||''}"></div>
+        <div class="fg"><label>Total de cotas</label><input id="ebq" type="number" min="1" value="${b.cotas_total||''}"></div>
+      </div>
+      <div class="fg"><label>Valor por cota (R$)</label><input id="ebv" type="number" step="0.01" value="${b.valor_cota||''}"></div>
+      <input type="hidden" id="ebid" value="${b.id}">
+      <button class="btn btn-p btn-f" onclick="R._saveEditBolao()">Salvar</button>`);
+  },
+  _saveEditBolao() {
+    const b=DB.boloes.get($('ebid')?.value); if(!b) return;
+    const nome=$('ebn')?.value?.trim(); if(!nome){alert('Informe o nome.');return;}
+    b.nome=nome;
+    b.concurso=parseInt($('ebc')?.value)||0;
+    b.cotas_total=Math.max(1, parseInt($('ebq')?.value)||b.cotas_total);
+    b.valor_cota=parseFloat($('ebv')?.value)||0;
+    DB.boloes.save(b); MODAL.close(); R._boloes();
+    TOAST.show('✏️ Bolão atualizado!', 'ok');
   },
 
   // ---- GRUPOS DE BOLÕES (acompanhamento: quem aceitou, pagou ou está pendente) ----
@@ -1941,7 +1972,11 @@ const R = {
       ${b.membros.map((m,i)=>`
         <div class="lr">
           <div><div style="font-weight:500">${m.nome}</div><div class="txs muted">${m.cotas} cota${m.cotas!==1?'s':''} · ${fmt$(m.cotas*b.valor_cota)}</div></div>
-          ${AUTH.isAdmin()?`<button class="btn btn-o btn-sm" onclick="R._togglePag('${b.id}',${i})">${m.pago?'Pago ✓':'Pendente'}</button>`:
+          ${AUTH.isAdmin()?`<div class="fx" style="gap:2px;align-items:center">
+            <button class="btn btn-o btn-sm" onclick="R._togglePag('${b.id}',${i})">${m.pago?'Pago ✓':'Pendente'}</button>
+            <button class="btn-ico" title="Editar membro" onclick="R._mEditMembro('${b.id}',${i})">✏️</button>
+            <button class="btn-ico" title="Remover do bolão" onclick="R._delMembro('${b.id}',${i})">✕</button>
+          </div>`:
           `<span class="badge ${m.pago?'b-pago':'b-pend'}">${m.pago?'Pago':'Pendente'}</span>`}
         </div>`).join('')}
       <div class="mt16"><button class="btn btn-o btn-f" onclick="R._mComp('${b.id}')">📎 Enviar comprovante</button></div>`;
@@ -1950,6 +1985,29 @@ const R = {
   _togglePag(bid,idx) {
     const b=DB.boloes.get(bid); if(!b) return;
     b.membros[idx].pago=!b.membros[idx].pago;
+    DB.boloes.save(b); R._tMem(b);
+  },
+  _mEditMembro(bid, idx) {
+    const b=DB.boloes.get(bid); const m=b?.membros?.[idx]; if(!m) return;
+    MODAL.open(`<div class="m-title">✏️ Editar membro</div>
+      <div class="fg"><label>Nome</label><input id="emn" type="text" value="${COTAS._esc(m.nome||'')}"></div>
+      <div class="fg"><label>Telefone (opcional)</label><div class="fone-row">${ddiSelect('emf-ddi', ddiDoFone(m.fone||''))}<input id="emf" type="tel" value="${foneSemDDI(m.fone||'')}"></div></div>
+      <div class="fg"><label>Cotas</label><input id="emq" type="number" min="1" value="${m.cotas||1}"></div>
+      <button class="btn btn-p btn-f" onclick="R._saveEditMembro('${bid}',${idx})">Salvar</button>`);
+  },
+  _saveEditMembro(bid, idx) {
+    const b=DB.boloes.get(bid); const m=b?.membros?.[idx]; if(!m) return;
+    const nome=$('emn')?.value?.trim(); if(!nome){alert('Informe o nome.');return;}
+    m.nome=nome;
+    m.fone=($('emf')?.value||'').trim() ? normalizarFoneDDI($('emf-ddi')?.value, $('emf').value) : '';
+    m.cotas=Math.max(1, parseInt($('emq')?.value)||1);
+    DB.boloes.save(b); MODAL.close(); R._tMem(b);
+    TOAST.show('✏️ Membro atualizado!', 'ok');
+  },
+  _delMembro(bid, idx) {
+    const b=DB.boloes.get(bid); const m=b?.membros?.[idx]; if(!m) return;
+    if(!confirm(`Remover "${m.nome}" deste bolão?`)) return;
+    b.membros.splice(idx,1);
     DB.boloes.save(b); R._tMem(b);
   },
 
@@ -2105,6 +2163,7 @@ const R = {
             </div>
             <div class="user-acts">
               <button class="btn btn-o btn-sm" onclick="R._toggleUser('${t._id}')">${t.ativo?'Desativar':'Ativar'}</button>
+              <button class="btn btn-o btn-sm" title="Editar" onclick="R._mEditUser('${t._id}')">✏️</button>
               <button class="btn btn-d btn-sm" onclick="R._delUser('${t._id}')">✕</button>
             </div>
           </div>`).join('')}
@@ -2162,6 +2221,24 @@ const R = {
     us[i].ativo=!us[i].ativo;
     DB.usuarios.save(us[i]); R._usuarios();
   },
+  _mEditUser(id) {
+    const u=DB.usuarios.list().find(x=>x.id===id); if(!u) return;
+    MODAL.open(`<div class="m-title">✏️ Editar apostador</div>
+      <div class="fg"><label>Nome completo</label><input id="eun" type="text" value="${COTAS._esc(u.nome||'')}"></div>
+      <div class="fg"><label>Telefone (opcional)</label><div class="fone-row">${ddiSelect('euf-ddi', ddiDoFone(u.fone||''))}<input id="euf" type="tel" value="${foneSemDDI(u.fone||'')}"></div></div>
+      <input type="hidden" id="euid" value="${u.id}">
+      <button class="btn btn-p btn-f" onclick="R._saveEditUser()">Salvar</button>`);
+  },
+  _saveEditUser() {
+    const u=DB.usuarios.list().find(x=>x.id===$('euid')?.value); if(!u) return;
+    const nome=$('eun')?.value?.trim(); if(!nome){alert('Informe o nome.');return;}
+    const outro=DB.usuarios.find(nome);
+    if(outro && outro.id!==u.id){alert('Já existe um apostador com esse nome.');return;}
+    u.nome=nome;
+    u.fone=($('euf')?.value||'').trim() ? normalizarFoneDDI($('euf-ddi')?.value, $('euf').value) : '';
+    DB.usuarios.save(u); MODAL.close(); R._usuarios();
+    TOAST.show('✏️ Apostador atualizado!', 'ok');
+  },
   _delUser(id) {
     if(!confirm('Remover usuário?')) return;
     DB.usuarios.del(id); R._usuarios();
@@ -2212,7 +2289,7 @@ const R = {
               </div>
               <div class="user-meta txs muted">📱 ${p.fone} · ${fmt$(p.valor)}${p.mensagem?' · '+p.mensagem:''}</div>
             </div>
-            <div class="user-acts"><button class="btn btn-d btn-sm" onclick="R._delPremiacao('${p.id}')">✕</button></div>
+            <div class="user-acts"><button class="btn btn-o btn-sm" title="Editar" onclick="R._mEditPremiacao('${p.id}')">✏️</button><button class="btn btn-d btn-sm" onclick="R._delPremiacao('${p.id}')">✕</button></div>
           </div>`).join('')}
       </div>`;
   },
@@ -2259,6 +2336,30 @@ const R = {
     DB.premiacoes.del(id);
     R._premiacao();
   },
+  _mEditPremiacao(id) {
+    const p=DB.premiacoes.list().find(x=>x.id===id); if(!p) return;
+    MODAL.open(`
+      <div class="m-title">✏️ Editar premiação</div>
+      <div class="fg mb8"><label>Nome completo do apostador</label><input id="epr-nome" value="${COTAS._esc(p.nome||'')}"></div>
+      <div class="fg mb8"><label>Telefone</label><div class="fone-row">${ddiSelect('epr-ddi', ddiDoFone(p.fone))}<input id="epr-fone" type="tel" value="${foneSemDDI(p.fone)}"></div></div>
+      <div class="fg mb8"><label>Valor do prêmio (R$)</label><input id="epr-valor" type="number" step="0.01" value="${p.valor||0}"></div>
+      <div class="fg mb8"><label>Mensagem (opcional)</label><input id="epr-msg" value="${COTAS._esc(p.mensagem||'')}"></div>
+      <input type="hidden" id="epr-id" value="${p.id}">
+      <button class="btn btn-p btn-f mt8" onclick="R._saveEditPremiacao()">Salvar</button>`);
+  },
+  _saveEditPremiacao() {
+    const p=DB.premiacoes.list().find(x=>x.id===$('epr-id')?.value); if(!p) return;
+    const nome=$('epr-nome').value.trim();
+    const ddi=$('epr-ddi')?.value||'55';
+    const foneDigitado=$('epr-fone').value.trim();
+    const valor=+$('epr-valor').value||0;
+    if(!nome){TOAST.show('Informe o nome do apostador.','err');return;}
+    if(foneDigitado.replace(/\D/g,'').length<foneMinLocal(ddi)){TOAST.show('Informe um telefone válido.','err');return;}
+    if(valor<=0){TOAST.show('Informe o valor do prêmio.','err');return;}
+    p.nome=nome; p.fone=normalizarFoneDDI(ddi,foneDigitado); p.valor=valor; p.mensagem=$('epr-msg').value.trim();
+    DB.premiacoes.save(p); MODAL.close(); R._premiacao();
+    TOAST.show('✏️ Premiação atualizada!', 'ok');
+  },
 
   // ---- BOLÃO ANUAL/PARCELADO (admin) ----
   _anual() {
@@ -2283,7 +2384,7 @@ const R = {
                 <div class="user-nome">${b.nome}</div>
                 <div class="user-meta txs muted">${b.ano} · ${fmt$(b.valor_mensal)}/mês × ${b.duracao_meses} · ${n} participante${n!==1?'s':''}</div>
               </div>
-              <div class="user-acts"><button class="btn btn-d btn-sm" onclick="event.stopPropagation();R._delAnual('${b.id}')">✕</button></div>
+              <div class="user-acts"><button class="btn btn-o btn-sm" title="Editar" onclick="event.stopPropagation();R._mEditAnual('${b.id}')">✏️</button><button class="btn btn-d btn-sm" onclick="event.stopPropagation();R._delAnual('${b.id}')">✕</button></div>
             </div>`;
           }).join('')}
       </div>`}`;
@@ -2324,6 +2425,35 @@ const R = {
     if (!confirm('Excluir esse bolão e todos os participantes/pagamentos?')) return;
     DB.boloesParcelados.del(id);
     R._anual();
+  },
+  // Reusa os ids an-* do modal de criação de propósito — R._anCalcTotal() funciona igual nos dois
+  _mEditAnual(id) {
+    const b=DB.boloesParcelados.get(id); if(!b) return;
+    MODAL.open(`
+      <div class="m-title">✏️ Editar Bolão Anual</div>
+      <div class="fg"><label>Nome</label><input id="an-nome" value="${COTAS._esc(b.nome||'')}"></div>
+      <div class="fr">
+        <div class="fg"><label>Ano</label><input id="an-ano" type="number" value="${b.ano}"></div>
+        <div class="fg"><label>Duração (meses)</label><input id="an-dur" type="number" value="${b.duracao_meses}" oninput="R._anCalcTotal()"></div>
+      </div>
+      <div class="fr">
+        <div class="fg"><label>Valor mensal (R$)</label><input id="an-mensal" type="number" step="0.01" value="${b.valor_mensal}" oninput="R._anCalcTotal()"></div>
+        <div class="fg"><label>Valor total (R$)</label><input id="an-total" type="number" step="0.01" value="${b.valor_total}"></div>
+      </div>
+      <input type="hidden" id="an-id" value="${b.id}">
+      <button class="btn btn-p btn-f mt8" onclick="R._saveEditAnual()">Salvar</button>
+      <div class="txs muted mt8">Meses já pagos e participantes não mudam — só os dados do bolão.</div>`);
+  },
+  _saveEditAnual() {
+    const b=DB.boloesParcelados.get($('an-id')?.value); if(!b) return;
+    const nome=$('an-nome').value.trim(); if(!nome){TOAST.show('Informe o nome do bolão.','err');return;}
+    b.nome=nome;
+    b.ano=+$('an-ano').value||b.ano;
+    b.duracao_meses=+$('an-dur').value||b.duracao_meses;
+    b.valor_mensal=+$('an-mensal').value||0;
+    b.valor_total=+$('an-total').value||(b.valor_mensal*b.duracao_meses);
+    DB.boloesParcelados.save(b); MODAL.close(); R._anual();
+    TOAST.show('✏️ Bolão atualizado!', 'ok');
   },
 
   _irAnualDet(id) { S.anualAtual=id; R.ir('anualDet'); },
@@ -2434,7 +2564,7 @@ const R = {
               <tr>
                 <td>${p.nome}<div class="txs muted">${p.fone}</div></td>
                 ${meses.map(m => { const c=R._anualCelula(b,p,m); return `<td class="${c.cls}" title="${c.titulo}" ${c.id?`onclick="R._verPagAnual('${c.id}')"`:''}>${c.icon}</td>`; }).join('')}
-                <td style="white-space:nowrap"><button class="btn-ico" title="Marcar meses pagos" onclick="R._mMarcarLoteAnual('${p.id}')">📅</button><button class="btn-ico" title="Remover" onclick="R._delParticipanteAnual('${p.id}')">✕</button></td>
+                <td style="white-space:nowrap"><button class="btn-ico" title="Editar" onclick="R._mEditParticipanteAnual('${p.id}')">✏️</button><button class="btn-ico" title="Marcar meses pagos" onclick="R._mMarcarLoteAnual('${p.id}')">📅</button><button class="btn-ico" title="Remover" onclick="R._delParticipanteAnual('${p.id}')">✕</button></td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -2507,6 +2637,28 @@ const R = {
     if (!confirm('Remover esse participante e todo o histórico de pagamentos dele?')) return;
     DB.boloesParcelados.delParticipante(S.anualAtual, id);
     R._renderAnualDet();
+  },
+  _mEditParticipanteAnual(id) {
+    const b=DB.boloesParcelados.get(S.anualAtual); const p=(b?.participantes||[]).find(x=>x.id===id); if(!p) return;
+    MODAL.open(`
+      <div class="m-title">✏️ Editar participante</div>
+      <div class="fg"><label>Nome completo</label><input id="eap-nome" value="${COTAS._esc(p.nome||'')}"></div>
+      <div class="fg"><label>Telefone</label><div class="fone-row">${ddiSelect('eap-ddi', ddiDoFone(p.fone))}<input id="eap-fone" type="tel" value="${foneSemDDI(p.fone)}"></div></div>
+      <input type="hidden" id="eap-id" value="${p.id}">
+      <button class="btn btn-p btn-f mt8" onclick="R._saveEditParticipanteAnual()">Salvar</button>
+      <div class="txs muted mt8">O histórico de pagamentos não muda — só nome e telefone.</div>`);
+  },
+  _saveEditParticipanteAnual() {
+    const b=DB.boloesParcelados.get(S.anualAtual); const p=(b?.participantes||[]).find(x=>x.id===$('eap-id')?.value); if(!p) return;
+    const nome=$('eap-nome').value.trim();
+    const ddi=$('eap-ddi')?.value||'55';
+    const foneDigitado=$('eap-fone').value.trim();
+    if(!nome){TOAST.show('Informe o nome.','err');return;}
+    if(foneDigitado.replace(/\D/g,'').length<foneMinLocal(ddi)){TOAST.show('Informe um telefone válido.','err');return;}
+    p.nome=nome; p.fone=normalizarFoneDDI(ddi,foneDigitado);
+    _api.post('/api/bolao-parcelado-participantes', { id:p.id, bolao_parcelado_id:b.id, nome:p.nome, fone:p.fone });
+    MODAL.close(); R._renderAnualDet();
+    TOAST.show('✏️ Participante atualizado!', 'ok');
   },
 
   // Importa participantes já cadastrados no "Apostadores do grupo" (grupo_membros) — evita
@@ -4066,7 +4218,10 @@ const COTAS = {
       '<div class="cota-grid">' + (l.cotas||[]).map(c => this._cotaAdmin(c)).join('') + '</div>' +
       '<div class="fxb mt8">' +
         (ativo ? '<button class="btn btn-o btn-sm" onclick="COTAS.encerrar(\'' + l.id + '\')">⏹️ Encerrar agora</button>' : '<span></span>') +
+        '<div class="fx" style="gap:6px">' +
+        '<button class="btn btn-o btn-sm" onclick="COTAS.modalEditar(\'' + l.id + '\')">✏️ Editar</button>' +
         '<button class="btn btn-d btn-sm" onclick="COTAS.excluir(\'' + l.id + '\')">🗑️ Excluir</button>' +
+        '</div>' +
       '</div>' +
     '</div>';
   },
@@ -4097,6 +4252,32 @@ const COTAS = {
   async liberar(id) { if (!confirm('Liberar essa cota de volta pra venda?')) return; await _api.put('/api/cotas/' + id + '/liberar'); await this._carregar(); this._renderAdmin(); BADGES.atualizar(); },
   async encerrar(id) { if (!confirm('Encerrar o lote agora?')) return; await _api.put('/api/lotes/' + id + '/encerrar'); await this._carregar(); this._renderAdmin(); },
   async excluir(id) { if (!confirm('Excluir o lote e todas as cotas? Não dá pra desfazer.')) return; await _api.del('/api/lotes/' + id); await this._carregar(); this._renderAdmin(); },
+
+  // Corrige dados de um lote criado errado. Total de cotas fica de fora: as cotas já existem
+  // (podendo estar reservadas/pagas) — pra isso, excluir o lote e criar outro.
+  modalEditar(id) {
+    const l = (S._lotesCache||[]).find(x=>x.id===id); if (!l) return;
+    MODAL.open('<div class="m-title">✏️ Editar lote</div>' +
+      '<div class="fg"><label>Nome</label><input id="el-nome" type="text" value="' + this._esc(l.nome) + '"></div>' +
+      '<div class="fr">' +
+        '<div class="fg"><label>Nº do concurso</label><input id="el-conc" type="number" value="' + (l.concurso||'') + '"></div>' +
+        '<div class="fg"><label>Valor da cota (R$)</label><input id="el-valor" type="number" step="0.01" value="' + (l.valor_cota||0) + '"></div>' +
+      '</div>' +
+      '<div class="fg"><label>Minutos por reserva</label><input id="el-dur" type="number" min="1" value="' + (l.duracao_min||30) + '"></div>' +
+      '<div class="txs muted mb8">O total de cotas não pode ser alterado — se saiu errado, exclua o lote e crie outro. Reservas já feitas mantêm o prazo antigo; o novo prazo vale pras próximas.</div>' +
+      '<button class="btn btn-p btn-f" onclick="COTAS.salvarEdicao(\'' + id + '\')">Salvar</button>');
+  },
+  async salvarEdicao(id) {
+    const nome = $('el-nome')?.value?.trim(); if (!nome) { TOAST.show('Informe o nome.', 'err'); return; }
+    await _api.put('/api/lotes/' + id, {
+      nome,
+      concurso: parseInt($('el-conc')?.value)||0,
+      valor_cota: parseFloat($('el-valor')?.value)||0,
+      duracao_min: Math.max(1, parseInt($('el-dur')?.value)||30),
+    });
+    MODAL.close(); await this._carregar(); this._renderAdmin();
+    TOAST.show('✏️ Lote atualizado!', 'ok');
+  },
 
   modalNovo() {
     const bs = DB.boloes.list();
