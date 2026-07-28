@@ -2785,53 +2785,10 @@ const R = {
     TOAST.show(msgs[status], 'ok');
   },
 
-  async _importarWA(grupoId, jid) {
-    MODAL.open(`<div class="m-title">📱 Importar do WhatsApp</div><div class="loading mt16"><div class="spinner"></div></div><p class="tc muted mt8">Buscando participantes...</p>`);
-    try {
-      const r = await fetch(API_URL + `/api/wpp/participantes/${encodeURIComponent(jid)}`);
-      const d = await r.json();
-      if (!d.ok) {
-        MODAL.open(`<div class="m-title">❌ Erro</div><p class="tc muted">${d.error}</p><button class="btn btn-p btn-f mt12" onclick="MODAL.close()">Fechar</button>`);
-        return;
-      }
-      const parts = d.participantes;
-      MODAL.open(`
-        <div class="m-title">📱 ${d.nome} — ${parts.length} participantes</div>
-        <p class="muted txs mb12">Preencha o nome de cada participante e selecione quem importar:</p>
-        <div style="max-height:50vh;overflow-y:auto">
-          ${parts.map((p,i)=>`
-            <div class="fr mb8" style="align-items:center;gap:8px">
-              <input type="checkbox" id="pi-${i}" checked>
-              <div style="flex:1">
-                <input type="text" id="pn-${i}" placeholder="Nome do apostador"
-                       style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text);margin-bottom:4px">
-                <input type="tel" id="pf-${i}" value="${p.foneOculto?'':p.fone}" placeholder="Telefone (opcional)"
-                       style="width:100%;padding:6px 10px;border-radius:8px;background:var(--input);border:1px solid var(--border);color:var(--text)">
-              </div>
-            </div>`).join('')}
-        </div>
-        <button class="btn btn-p btn-f mt12" onclick="R._salvarImportados(${JSON.stringify(parts).replace(/</g,'&lt;').replace(/>/g,'&gt;')})">✅ Importar selecionados</button>
-        <button class="btn btn-o btn-f mt8" onclick="MODAL.close()">Cancelar</button>
-      `);
-    } catch(e) {
-      MODAL.open(`<div class="m-title">❌ Erro</div><p class="tc muted">${e.message}</p><button class="btn btn-p btn-f mt12" onclick="MODAL.close()">Fechar</button>`);
-    }
-  },
-  _salvarImportados(parts) {
-    let ok=0, dup=0;
-    parts.forEach((p,i) => {
-      if (!document.getElementById(`pi-${i}`)?.checked) return;
-      const nome = document.getElementById(`pn-${i}`)?.value?.trim();
-      if (!nome) return;
-      if (DB.usuarios.find(nome)) { dup++; return; }
-      const fone = document.getElementById(`pf-${i}`)?.value?.trim()||'';
-      DB.usuarios.save({ id:uid(), nome, ativo:true, criado:hoje(), fone });
-      ok++;
-    });
-    MODAL.close();
-    alert(`${ok} apostador${ok!==1?'es':''} importado${ok!==1?'s':''}!${dup?` (${dup} já existia${dup!==1?'m':''})`:''}`);
-    R._usuarios();
-  },
+  // O fluxo manual de importação via bot (_importarWA/_salvarImportados) foi removido em
+  // 28/07/2026: vincular o grupo ao bot já importa todos os participantes automaticamente pro
+  // cadastro do grupo (grupo_membros) — o modal manual exigia digitar nomes e salvava em outro
+  // lugar (usuarios), só confundia.
 
   // ---- IMPORTAR MEMBROS POR COLAGEM (WhatsApp) ----
   // Reconhece linhas como "Nome: +55 61 99999-9999", "Nome +5561999999999",
@@ -2974,9 +2931,13 @@ const R = {
       <div class="sectt mb12">Grupos cadastrados</div>
       <div id="lista-grp">
         ${gs.length?gs.map(g=>{
+          // Contagem real primeiro: cadastro do grupo (importado automaticamente pelo bot ao
+          // vincular); depois membros de bolões do grupo; o número manual digitado no cadastro
+          // é só estimativa de fallback enquanto o grupo não foi vinculado.
+          const reais = DB.grupoMembros.list(g.id).length;
           const ns=new Set();
           S.cache.boloes.filter(b=>bolaoDoGrupo(b,g)).forEach(b=>(b.membros||[]).forEach(m=>ns.add(m.nome.trim().toLowerCase())));
-          const cnt = ns.size || g.membros;
+          const cnt = reais || ns.size || g.membros;
           return `
           <div class="grp-card">
             <div style="flex:1">
@@ -2985,7 +2946,6 @@ const R = {
             </div>
             <div class="grp-acts">
               <button class="btn btn-o btn-sm" onclick="R._mImportarColar('${g.id}')">📋 Importar membros</button>
-              ${g.jid?`<button class="btn btn-o btn-sm" onclick="R._importarWA('${g.id}','${g.jid}')">📱 Importar</button>`:''}
               <button class="btn-ico" onclick="R._mEditGrp('${g.id}')">✏️</button>
               <button class="btn-ico" onclick="R._delGrp('${g.id}')">🗑️</button>
             </div>
@@ -3088,7 +3048,8 @@ const R = {
     MODAL.open(`<div class="m-title">➕ Novo Grupo</div>
       <div class="fg"><label>Nome do grupo</label><input id="mgn" type="text" placeholder="Grupo da Firma"></div>
       <div class="fg"><label>Link de convite WhatsApp</label><input id="mgl" type="text" placeholder="https://chat.whatsapp.com/..."></div>
-      <div class="fg"><label>Nº de membros</label><input id="mgm" type="number" placeholder="45"></div>
+      <div class="fg"><label>Nº de membros (estimativa, opcional)</label><input id="mgm" type="number" placeholder="45">
+        <div class="txs muted mt4">Só usada enquanto o grupo não estiver vinculado ao bot — depois a contagem real dos participantes importados assume sozinha.</div></div>
       <button class="btn btn-p btn-f" onclick="R._saveGrp()">Salvar</button>`);
   },
   _mEditGrp(id) {
@@ -3096,14 +3057,17 @@ const R = {
     MODAL.open(`<div class="m-title">✏️ Editar Grupo</div>
       <div class="fg"><label>Nome</label><input id="mgn" value="${g.nome}"></div>
       <div class="fg"><label>Link</label><input id="mgl" value="${g.link||''}"></div>
-      <div class="fg"><label>Membros</label><input id="mgm" type="number" value="${g.membros}"></div>
+      <div class="fg"><label>Nº de membros (estimativa, opcional)</label><input id="mgm" type="number" value="${g.membros||''}"></div>
       <input type="hidden" id="mgid" value="${g.id}">
       <button class="btn btn-p btn-f" onclick="R._saveGrp()">Salvar</button>`);
   },
   _saveGrp() {
     const id=$('mgid')?.value||uid(), nome=$('mgn').value.trim();
     if(!nome){alert('Informe o nome.');return;}
-    DB.grupos.save({id,nome,link:$('mgl').value.trim(),membros:parseInt($('mgm').value)||0,ativo:true});
+    // Preserva o jid do vínculo com o bot ao editar — sem isso, o backend gravava jid vazio e o
+    // vínculo sumia silenciosamente toda vez que o grupo era editado.
+    const existente=DB.grupos.list().find(g=>g.id===id);
+    DB.grupos.save({id,nome,link:$('mgl').value.trim(),membros:parseInt($('mgm').value)||0,ativo:true,jid:existente?.jid||''});
     MODAL.close(); R._whatsapp();
   },
   _delGrp(id){
