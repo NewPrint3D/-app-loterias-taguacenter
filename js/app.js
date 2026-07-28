@@ -1045,6 +1045,15 @@ const R = {
   // Planilha de um bolão parcelado (usada na Home dos 3 perfis):
   // - gerenciar:true → botão "Gerenciar ›" no título (admin/dev)
   // - euId → destaca a linha do próprio apostador com as ações de comprovante/quitação
+  // Nome pra exibir na planilha quando o participante foi cadastrado só com o número (o nome
+  // chega sozinho no 1º login dele). Admin vê o telefone completo; na planilha compartilhada os
+  // outros participantes veem só o final do número — não expõe o telefone de todo mundo.
+  _anualNomeExibir(p, admin) {
+    const semNome = !p.nome || p.nome.trim().toLowerCase()==='sem nome';
+    if (!semNome) return p.nome;
+    const f = (p.fone||'').replace(/\D/g,'');
+    return `📱 ${admin ? (p.fone||'—') : '•••'+f.slice(-4)} <span class="txs muted">(aguardando cadastro)</span>`;
+  },
   _anualTabelaBolao(b, { gerenciar=false, euId=null } = {}) {
     const parts = b.participantes||[];
     const meses = Array.from({length:b.duracao_meses}, (_,i)=>i+1);
@@ -1059,7 +1068,7 @@ const R = {
           <tbody>
             ${parts.length ? parts.map(pp => `
               <tr class="${pp.id===euId?'anual-tbl-eu':''}">
-                <td ${pp.id===euId?'style="cursor:pointer" onclick="R._mMeuAnualAcao()"':''}>${pp.nome}${pp.id===euId?' <span class="txs muted">(você — toque p/ anexar)</span>':''}</td>
+                <td ${pp.id===euId?'style="cursor:pointer" onclick="R._mMeuAnualAcao()"':''}>${R._anualNomeExibir(pp, gerenciar)}${pp.id===euId?' <span class="txs muted">(você — toque p/ anexar)</span>':''}</td>
                 ${meses.map(m=>{ const c=R._anualCelula(b,pp,m); return `<td class="${c.cls}" title="${c.titulo}">${c.icon}</td>`; }).join('')}
               </tr>`).join('')
             : `<tr><td colspan="${meses.length+1}" class="tc muted" style="padding:18px 10px;white-space:normal">⏳ ${gerenciar?'Sem participantes ainda — toque em "Gerenciar" pra importar do grupo.':'Sem participantes ainda — aguardando dados dos grupos de WhatsApp.'}</td></tr>`}
@@ -2562,7 +2571,7 @@ const R = {
           <tbody>
             ${!parts.length ? `<tr><td colspan="${meses.length+2}" class="tc muted" style="padding:20px 0">Nenhum participante cadastrado.</td></tr>` : parts.map(p => `
               <tr>
-                <td>${p.nome}<div class="txs muted">${p.fone}</div></td>
+                <td>${R._anualNomeExibir(p, true)}<div class="txs muted">${p.fone}</div></td>
                 ${meses.map(m => { const c=R._anualCelula(b,p,m); return `<td class="${c.cls}" title="${c.titulo}" ${c.id?`onclick="R._verPagAnual('${c.id}')"`:''}>${c.icon}</td>`; }).join('')}
                 <td style="white-space:nowrap"><button class="btn-ico" title="Editar" onclick="R._mEditParticipanteAnual('${p.id}')">✏️</button><button class="btn-ico" title="Marcar meses pagos" onclick="R._mMarcarLoteAnual('${p.id}')">📅</button><button class="btn-ico" title="Remover" onclick="R._delParticipanteAnual('${p.id}')">✕</button></td>
               </tr>`).join('')}
@@ -2609,10 +2618,11 @@ const R = {
     const dl = DB.usuarios.list().map(u=>`<option value="${u.nome}">`).join('');
     MODAL.open(`
       <div class="m-title">👤 Novo participante</div>
-      <div class="fg"><label>Nome completo</label><input id="ap-nome" list="dl-ap-anual" placeholder="Nome completo" oninput="R._anAutoFone(this.value)">
+      <div class="fg"><label>Telefone (obrigatório)</label><div class="fone-row">${ddiSelect('ap-ddi')}<input id="ap-fone" type="tel" placeholder="(61) 99999-9999"></div></div>
+      <div class="fg"><label>Nome completo (opcional)</label><input id="ap-nome" list="dl-ap-anual" placeholder="Deixe vazio — preenche sozinho no 1º login" oninput="R._anAutoFone(this.value)">
       <datalist id="dl-ap-anual">${dl}</datalist></div>
-      <div class="fg"><label>Telefone</label><div class="fone-row">${ddiSelect('ap-ddi')}<input id="ap-fone" type="tel" placeholder="(61) 99999-9999"></div></div>
       <button class="btn btn-p btn-f mt8" onclick="R._salvarParticipanteAnual()">Adicionar</button>
+      <div class="txs muted mt8">O telefone é a chave do bolão: quando o apostador entrar no app com esse número, o nome dele é capturado automaticamente e preenche a planilha.</div>
     `);
   },
   _anAutoFone(nome) {
@@ -2623,11 +2633,10 @@ const R = {
     }
   },
   _salvarParticipanteAnual() {
-    const nome = $('ap-nome').value.trim();
+    const nome = $('ap-nome').value.trim() || 'Sem nome'; // nome é opcional — o login do apostador preenche depois
     const ddi = $('ap-ddi')?.value || '55';
     const foneDigitado = $('ap-fone').value.trim();
-    if (!nome) { TOAST.show('Informe o nome.', 'err'); return; }
-    if (foneDigitado.replace(/\D/g,'').length < foneMinLocal(ddi)) { TOAST.show('Informe um telefone válido.', 'err'); return; }
+    if (foneDigitado.replace(/\D/g,'').length < foneMinLocal(ddi)) { TOAST.show('Informe um telefone válido — ele é a chave do bolão.', 'err'); return; }
     DB.boloesParcelados.salvarParticipante({ id:uid(), bolao_parcelado_id:S.anualAtual, nome, fone:normalizarFoneDDI(ddi, foneDigitado) });
     MODAL.close();
     R._renderAnualDet();
@@ -2682,16 +2691,20 @@ const R = {
     if (!grupoId) { el.innerHTML=''; return; }
     const b = DB.boloesParcelados.get(S.anualAtual);
     const jaTem = new Set((b.participantes||[]).map(p=>p.fone));
-    const roster = DB.grupoMembros.list(grupoId).filter(m=>m.nome && m.nome.trim().toLowerCase()!=='sem nome');
-    if (!roster.length) { el.innerHTML = '<p class="txs muted mt8">Nenhum apostador identificado nesse grupo ainda.</p>'; return; }
+    // A chave do bolão anual é o TELEFONE: basta ter número válido pra entrar na planilha — o
+    // nome é preenchido sozinho quando o apostador entrar no app pra pagar (login exige nome
+    // completo + telefone, e o backend casa pelo telefone).
+    const roster = DB.grupoMembros.list(grupoId).filter(m=>(m.fone||'').replace(/\D/g,'').length>=10);
+    if (!roster.length) { el.innerHTML = '<p class="txs muted mt8">Nenhum apostador com telefone nesse grupo ainda. Números ocultos pelo WhatsApp não têm como ser importados — adicione o telefone manualmente (✏️ na tela do grupo) ou cadastre direto em "+ Participante".</p>'; return; }
     el.innerHTML = `
-      <p class="txs muted mt8 mb4">${roster.length} apostador${roster.length>1?'es':''} — desmarque quem não participa deste bolão:</p>
+      <p class="txs muted mt8 mb4">${roster.length} apostador${roster.length>1?'es':''} com telefone — desmarque quem não participa deste bolão. Quem ainda não tem nome será identificado sozinho ao entrar no app:</p>
       <div style="max-height:40vh;overflow-y:auto">
         ${roster.map(m=>{
+          const semNome = !m.nome || m.nome.trim().toLowerCase()==='sem nome';
           const jaEsta = jaTem.has(normalizarFone(m.fone||''));
           return `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;${jaEsta?'opacity:.45':''}">
-            <input type="checkbox" class="igm" data-nome="${m.nome.replace(/"/g,'&quot;')}" data-fone="${m.fone||''}" ${jaEsta?'disabled':'checked'}>
-            <span>${m.nome}${jaEsta?' <span class="txs muted">(já participa)</span>':''}</span>
+            <input type="checkbox" class="igm" data-nome="${semNome?'Sem nome':m.nome.replace(/"/g,'&quot;')}" data-fone="${m.fone||''}" ${jaEsta?'disabled':'checked'}>
+            <span>${semNome?`📱 ${m.fone} <span class="txs muted">(aguardando cadastro)</span>`:m.nome}${jaEsta?' <span class="txs muted">(já participa)</span>':''}</span>
           </label>`;
         }).join('')}
       </div>

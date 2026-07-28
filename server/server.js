@@ -644,11 +644,25 @@ app.post('/api/usuarios/registrar', async (req, res) => {
   const { id, nome, fone, criado } = req.body;
   if (!id || !nome || !fone) return res.status(400).json({ ok: false, error: 'Dados incompletos.' });
   try {
+    const nomeLimpo = String(nome).trim().slice(0, 80);
+    const foneNorm = normalizarFoneServidor(fone);
     await pool.query(
       `INSERT INTO usuarios(id,nome,ativo,criado,fone) VALUES($1,$2,true,$3,$4)
        ON CONFLICT(id) DO UPDATE SET nome=$2,fone=$4`,
-      [id, String(nome).trim().slice(0, 80), criado||'', normalizarFoneServidor(fone)]
+      [id, nomeLimpo, criado||'', foneNorm]
     );
+    // Identificação automática pelo telefone: cadastros feitos só com o número (participante do
+    // bolão anual, apostador do grupo importado pelo bot) ganham o nome do apostador no primeiro
+    // login dele. Só preenche onde o nome ainda está vazio/placeholder — nunca sobrescreve nome
+    // já conhecido. Fire-and-forget: falha aqui não pode travar o login.
+    pool.query(
+      `UPDATE bolao_parcelado_participantes SET nome=$1 WHERE fone=$2 AND (nome='' OR LOWER(nome)='sem nome')`,
+      [nomeLimpo, foneNorm]
+    ).catch(e => console.error('Identificação automática (anual):', e.message));
+    pool.query(
+      `UPDATE grupo_membros SET nome=$1 WHERE fone=$2 AND (nome='' OR LOWER(nome)='sem nome')`,
+      [nomeLimpo, foneNorm]
+    ).catch(e => console.error('Identificação automática (grupo):', e.message));
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
