@@ -592,11 +592,16 @@ input:checked + .sl2::before { transform: translateX(19px); }
 .chart-w { position: relative; height: 210px; margin-bottom: 14px; }
 
 /* ---- BOLÃO ANUAL — planilha ---- */
-.anual-tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--rsm); margin-bottom: 16px; }
-.anual-tbl { border-collapse: collapse; width: 100%; font-size: .78rem; white-space: nowrap; }
-.anual-tbl th, .anual-tbl td { padding: 8px 10px; text-align: center; border-bottom: 1px solid var(--border); }
-.anual-tbl th { background: var(--bg3); color: var(--muted); font-weight: 600; font-size: .72rem; }
-.anual-tbl td:first-child, .anual-tbl th:first-child { text-align: left; position: sticky; left: 0; background: var(--bg2); }
+/* Sem overflow-x/barra de rolagem de propósito: muita gente leiga não percebe a barra e "perde"
+   os meses/botões escondidos. A tabela é comprimida (table-layout fixed + células enxutas) pra
+   caber INTEIRA na largura da tela, em qualquer aparelho. */
+.anual-tbl-wrap { border: 1px solid var(--border); border-radius: var(--rsm); margin-bottom: 16px; }
+.anual-tbl { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: .74rem; }
+.anual-tbl th, .anual-tbl td { padding: 6px 1px; text-align: center; border-bottom: 1px solid var(--border); overflow: hidden; }
+.anual-tbl th { background: var(--bg3); color: var(--muted); font-weight: 600; font-size: .6rem; }
+.anual-tbl td:first-child, .anual-tbl th:first-child { text-align: left; width: 30%; padding-left: 8px; word-break: break-word; white-space: normal; background: var(--bg2); }
+.anual-tbl th:last-child:empty { width: 30px; } /* coluna de ações da tela de gestão */
+.anual-tbl .btn-ico { display: block; margin: 0 auto; padding: 2px 4px; } /* ações empilhadas, sem alargar a coluna */
 .anual-tbl tbody tr:last-child td { border-bottom: none; }
 .anual-tbl td.cel-pago, .anual-tbl td.cel-pend, .anual-tbl td.cel-atraso, .anual-tbl td.cel-quitado { cursor: pointer; }
 .anual-tbl td.cel-futuro { color: var(--border); }
