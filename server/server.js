@@ -305,15 +305,20 @@ app.post('/api/auth/codigo-enviar', async (req, res) => {
   _codigosAcesso.set(fone, { codigo, expira: agora + 5 * 60 * 1000, tentativas: 0 });
   let enviado = false, semWhatsapp = false;
   if (botSock && botStatus === 'conectado') {
+    const textoCodigo = `🔑 Seu código de acesso ao app da *Lotérica Taguacenter*: *${codigo}*\n\nEle vale por 5 minutos. Se você não pediu esse código, ignore esta mensagem.`;
     try {
-      // Checa ANTES se o número existe no WhatsApp — mandar pra número sem WhatsApp não dá erro,
-      // a mensagem só some no vazio e o apostador fica esperando um código que nunca chega.
-      // Também pega erro de digitação na hora, com aviso claro em vez de silêncio.
-      const existe = await botSock.onWhatsApp(fone);
-      if (!existe?.[0]?.exists) {
+      // Checagem CONSULTIVA (fail-open): na v7 (release candidate) a consulta onWhatsApp pode
+      // vir indeterminada (undefined/erro) mesmo pra número válido — nesses casos tenta enviar
+      // assim mesmo, em vez de bloquear. Só avisa "sem WhatsApp" quando a consulta respondeu de
+      // fato e não achou o número (array vazio = não existe; entradas retornadas sempre existem).
+      let jidDestino = `${fone}@s.whatsapp.net`;
+      let existe;
+      try { existe = await botSock.onWhatsApp(fone); } catch (e) { console.error('Código de acesso: onWhatsApp falhou —', e.message); }
+      if (Array.isArray(existe) && !existe.length) {
         semWhatsapp = true;
       } else {
-        await botSock.sendMessage(existe[0].jid || `${fone}@s.whatsapp.net`, { text: `🔑 Seu código de acesso ao app da *Lotérica Taguacenter*: *${codigo}*\n\nEle vale por 5 minutos. Se você não pediu esse código, ignore esta mensagem.` });
+        if (Array.isArray(existe) && existe[0]?.jid) jidDestino = existe[0].jid; // JID canônico quando a consulta respondeu
+        await botSock.sendMessage(jidDestino, { text: textoCodigo });
         enviado = true;
       }
     } catch (e) { console.error('Código de acesso: falha ao enviar via bot —', e.message); }
@@ -338,10 +343,17 @@ app.post('/api/auth/codigo-verificar', (req, res) => {
 
 // Plano B do lotérico — POST de propósito (POST sem token cai no middleware JWT; um GET seria
 // público e qualquer um leria o código, anulando a verificação inteira).
+// Sem código ativo, GERA um na hora: o plano B tem que funcionar SEMPRE — inclusive quando o
+// número estourou o limite de envios da rota pública (senão apostador travado + lotérica de mãos
+// atadas = beco sem saída). O limite anti-spam continua valendo só pro caminho público.
 app.post('/api/auth/codigo-atual', (req, res) => {
   const fone = normalizarFoneServidor(String((req.body || {}).fone || ''));
-  const reg = _codigosAcesso.get(fone);
-  if (!reg || Date.now() > reg.expira) return res.json({ ok: true, codigo: null });
+  if (fone.replace(/\D/g, '').length < 10) return res.status(400).json({ ok: false, error: 'Telefone inválido.' });
+  let reg = _codigosAcesso.get(fone);
+  if (!reg || Date.now() > reg.expira) {
+    reg = { codigo: String(Math.floor(100000 + Math.random() * 900000)), expira: Date.now() + 5 * 60 * 1000, tentativas: 0 };
+    _codigosAcesso.set(fone, reg);
+  }
   res.json({ ok: true, codigo: reg.codigo, expiraEm: new Date(reg.expira).toISOString() });
 });
 
