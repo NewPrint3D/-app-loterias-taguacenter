@@ -487,8 +487,18 @@ const AUTH = {
       if (sub) sub.textContent = 'Nome completo, por favor';
     } else {
       const conhecido = AUTH._apostadoresConhecidos()[AUTH._normNome(nome)];
-      $('field-telefone').hidden = !!conhecido;
-      if (sub) sub.textContent = conhecido ? 'Bem-vindo de volta! 👋' : 'Informe seu telefone para continuar';
+      const verificado = conhecido && AUTH._foneVerificado(conhecido);
+      // Número memorizado mas ainda NÃO verificado neste aparelho: mostra o campo PRÉ-PREENCHIDO
+      // com ele — a pessoa vê pra qual número o código vai e corrige ali mesmo se estiver
+      // errado/antigo. (Sem isso, o código ia silencioso pra um número que ela nem via.)
+      $('field-telefone').hidden = !!verificado;
+      if (conhecido && !verificado) {
+        const inp = $('inp-telefone');
+        if (inp && !inp.value.trim()) { inp.value = foneSemDDI(conhecido); const ddi = $('inp-ddi'); if (ddi) ddi.value = ddiDoFone(conhecido); }
+      }
+      if (sub) sub.textContent = verificado ? 'Bem-vindo de volta! 👋'
+        : conhecido ? 'Confirme seu telefone para continuar'
+        : 'Informe seu telefone para continuar';
     }
     AUTH._atualizarBotaoEntrar();
   },
@@ -501,7 +511,8 @@ const AUTH = {
     const low = nome.toLowerCase();
     if (low === 'admin' || low === 'dev') { btn.disabled = false; return; }
     if (!AUTH._nomeCompleto(nome)) { btn.disabled = true; return; }
-    if (AUTH._apostadoresConhecidos()[AUTH._normNome(nome)]) { btn.disabled = false; return; }
+    const conhecido = AUTH._apostadoresConhecidos()[AUTH._normNome(nome)];
+    if (conhecido && AUTH._foneVerificado(conhecido)) { btn.disabled = false; return; }
     const digitos = ($('inp-telefone')?.value || '').replace(/\D/g, '');
     btn.disabled = digitos.length < foneMinLocal($('inp-ddi')?.value || '55');
   },
@@ -540,6 +551,9 @@ const AUTH = {
       return;
     }
     let fone = AUTH._apostadoresConhecidos()[AUTH._normNome(nome)];
+    // Memorizado mas não verificado: o campo está visível/pré-preenchido — vale o que a pessoa
+    // deixou digitado ali (ela pode ter corrigido o número), não a memória do aparelho.
+    if (fone && !AUTH._foneVerificado(fone)) fone = null;
     if (!fone) {
       const ddi = $('inp-ddi')?.value || '55';
       const digitado = ($('inp-telefone')?.value || '').trim();
@@ -566,10 +580,10 @@ const AUTH = {
         AUTH._aguardandoCodigo = fone;
         $('field-codigo').hidden = false;
         if (hint) hint.textContent = d.enviado
-          ? `Enviamos um código de 6 dígitos no WhatsApp do número informado. Digite-o acima e toque em Entrar.`
+          ? `Enviamos um código de 6 dígitos no WhatsApp +${fone}. Digite-o acima e toque em Entrar.`
           : d.semWhatsapp
-          ? `⚠️ O número informado não tem WhatsApp. Confira se digitou certo — ou peça seu código na lotérica e digite acima.`
-          : `Não conseguimos enviar pelo WhatsApp agora — peça o código na lotérica e digite acima.`;
+          ? `⚠️ O número +${fone} não tem WhatsApp. Confira se digitou certo — ou peça seu código na lotérica e digite acima.`
+          : `Não conseguimos enviar o código pro +${fone} agora — peça o código na lotérica e digite acima.`;
         err.hidden = true;
         $('inp-codigo')?.focus();
         return; // aguarda a pessoa digitar o código e tocar em Entrar de novo
