@@ -567,6 +567,8 @@ const AUTH = {
         $('field-codigo').hidden = false;
         if (hint) hint.textContent = d.enviado
           ? `Enviamos um código de 6 dígitos no WhatsApp do número informado. Digite-o acima e toque em Entrar.`
+          : d.semWhatsapp
+          ? `⚠️ O número informado não tem WhatsApp. Confira se digitou certo — ou peça seu código na lotérica e digite acima.`
           : `Não conseguimos enviar pelo WhatsApp agora — peça o código na lotérica e digite acima.`;
         err.hidden = true;
         $('inp-codigo')?.focus();
@@ -2142,7 +2144,7 @@ const R = {
         <div class="amenu-c" onclick="R.ir('pagamentos')"><span id="amenu-not-pags" class="amenu-notif" style="display:none"></span><span class="amenu-i">💳</span><div class="amenu-n">Pagamentos</div></div>
         <div class="amenu-c" style="border-color:var(--gold)" onclick="R.ir('lotes')"><span id="amenu-not-lotes" class="amenu-notif" style="display:none"></span><span class="amenu-i">🧾</span><div class="amenu-n">Cotas ao Vivo</div></div>
         <div class="amenu-c" onclick="R.ir('boloes')"><span class="amenu-i">🎲</span><div class="amenu-n">Bolões</div></div>
-        <div class="amenu-c" onclick="R.ir('usuarios')"><span class="amenu-i">👥</span><div class="amenu-n">Usuários <span style="font-size:.65rem;background:var(--primary);color:#000;border-radius:10px;padding:1px 5px;margin-left:2px">${qtUsr}</span></div></div>
+        <div class="amenu-c" onclick="R.ir('usuarios')"><span class="amenu-i">👥</span><div class="amenu-n">Banco de Clientes <span style="font-size:.65rem;background:var(--primary);color:#000;border-radius:10px;padding:1px 5px;margin-left:2px">${qtUsr}</span></div></div>
         <div class="amenu-c" onclick="R.ir('premiacao')"><span class="amenu-i">🏆</span><div class="amenu-n">Premiação</div></div>
         <div class="amenu-c" onclick="R.ir('anual')"><span id="amenu-not-anual" class="amenu-notif" style="display:none"></span><span class="amenu-i">📅</span><div class="amenu-n">Bolão Anual</div></div>
         ${isdev?`<div class="amenu-c" style="border-color:var(--red)" onclick="R.ir('controle')"><span class="amenu-i">🔒</span><div class="amenu-n" style="color:var(--red)">Controle Dev</div></div>`:''}
@@ -2155,7 +2157,7 @@ const R = {
   // ---- USUÁRIOS (admin) — integrado com bolões e WhatsApp ----
   _usuarios() {
     if(!AUTH.isAdmin()){R.ir('home');return;}
-    $('h-title').textContent='Apostadores';
+    $('h-title').textContent='Banco de Clientes';
 
     // Coleta todos apostadores únicos de bolões
     const mapa = {};
@@ -2200,7 +2202,7 @@ const R = {
 
     $('view-usuarios').innerHTML=`
       <div class="fxb mb12">
-        <div class="sectt">Apostadores (${todos.length})</div>
+        <div class="sectt">Banco de Clientes (${todos.length})</div>
         <div class="fx" style="gap:6px">
           <button class="btn btn-o btn-sm" title="Ver código de acesso de um apostador" onclick="R._mCodigoAcesso()">🔑 Código</button>
           <button class="btn btn-p btn-sm" onclick="R._mNovoUser()">+ Adicionar</button>
@@ -2208,7 +2210,7 @@ const R = {
       </div>
 
       <div class="fxb mb8">
-        <div class="sectt">📱 Banco de clientes (${clientes.length})</div>
+        <div class="sectt">📱 Com acesso ao app (${clientes.length})</div>
         ${comFone ? `<button class="btn btn-o btn-sm" onclick="R._copiarTelefonesClientes()">📋 Copiar telefones</button>` : ''}
       </div>
       <div class="txs muted mb8">Quem já entrou no app com nome + telefone — base confiável pra divulgação futura (WhatsApp, promoções, sorteios).</div>
@@ -3468,7 +3470,7 @@ const R = {
       </div>
       <div class="divider"></div>
       ${isAdm?`<div class="lr"><span class="muted">Bolões ativos</span><span>${bolAtivos}</span></div>
-        <div class="lr"><span class="muted">Usuários registrados</span><span>${DB.usuarios.list().length}</span></div>`
+        <div class="lr"><span class="muted">Banco de clientes</span><span>${DB.usuarios.list().length}</span></div>`
         :`<div class="lr"><span class="muted">Bolões disponíveis</span><span>${bolAtivos}</span></div>`}
       <div class="lr"><span class="muted">Versão</span><span>v${APP.versao}</span></div>
       <div class="mt16"><button class="btn btn-d btn-f" onclick="AUTH.sair()">Sair do app</button></div>`;

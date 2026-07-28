@@ -303,16 +303,24 @@ app.post('/api/auth/codigo-enviar', async (req, res) => {
   envios.push(agora); _codigosEnvios.set(fone, envios);
   const codigo = String(Math.floor(100000 + Math.random() * 900000));
   _codigosAcesso.set(fone, { codigo, expira: agora + 5 * 60 * 1000, tentativas: 0 });
-  let enviado = false;
+  let enviado = false, semWhatsapp = false;
   if (botSock && botStatus === 'conectado') {
     try {
-      await botSock.sendMessage(`${fone}@s.whatsapp.net`, { text: `🔑 Seu código de acesso ao app da *Lotérica Taguacenter*: *${codigo}*\n\nEle vale por 5 minutos. Se você não pediu esse código, ignore esta mensagem.` });
-      enviado = true;
+      // Checa ANTES se o número existe no WhatsApp — mandar pra número sem WhatsApp não dá erro,
+      // a mensagem só some no vazio e o apostador fica esperando um código que nunca chega.
+      // Também pega erro de digitação na hora, com aviso claro em vez de silêncio.
+      const existe = await botSock.onWhatsApp(fone);
+      if (!existe?.[0]?.exists) {
+        semWhatsapp = true;
+      } else {
+        await botSock.sendMessage(existe[0].jid || `${fone}@s.whatsapp.net`, { text: `🔑 Seu código de acesso ao app da *Lotérica Taguacenter*: *${codigo}*\n\nEle vale por 5 minutos. Se você não pediu esse código, ignore esta mensagem.` });
+        enviado = true;
+      }
     } catch (e) { console.error('Código de acesso: falha ao enviar via bot —', e.message); }
   }
-  // Mesmo sem conseguir entregar (bot desconectado/erro), o código fica gerado — o lotérico
-  // consulta pela rota protegida abaixo e passa pessoalmente ao apostador (plano B).
-  res.json({ ok: true, enviado });
+  // Mesmo sem conseguir entregar (bot desconectado, número sem WhatsApp, erro), o código fica
+  // gerado — o lotérico consulta pela rota protegida abaixo e passa pessoalmente (plano B).
+  res.json({ ok: true, enviado, semWhatsapp });
 });
 
 app.post('/api/auth/codigo-verificar', (req, res) => {
