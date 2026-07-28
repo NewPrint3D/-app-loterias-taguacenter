@@ -53,7 +53,7 @@ const assinarToken = role => jwt.sign({ role }, JWT_SECRET, { expiresIn: JWT_EXP
 
 // Rotas de escrita usadas por quem não tem login (cliente sem senha) — ficam de fora do gate.
 // Toda rota pública nova precisa ser adicionada aqui E comentada no próprio app.post/put dela.
-const ROTAS_ESCRITA_PUBLICAS = new Set(['/api/auth/login', '/api/pagamentos', '/api/config/log', '/api/usuarios/registrar', '/api/bolao-parcelado-pagamentos']);
+const ROTAS_ESCRITA_PUBLICAS = new Set(['/api/auth/login', '/api/pagamentos', '/api/config/log', '/api/usuarios/registrar', '/api/bolao-parcelado-pagamentos', '/api/auth/codigo-enviar', '/api/auth/codigo-verificar']);
 
 // Cliente (nome+telefone, sem token) reserva a cota e anexa o comprovante -- essas duas rotas de
 // cota precisam ficar publicas. Reservar e atomico (so pega se estiver 'livre') e anexar so
@@ -281,6 +281,60 @@ app.delete('/api/grupo_membros/:id', async (req, res) => {
     await pool.query('DELETE FROM grupo_membros WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// =============================================
+// VERIFICAÇÃO DO APOSTADOR — código via WhatsApp (bot)
+// =============================================
+// Primeiro login de um telefone num aparelho: o app pede um código de 6 dígitos que o bot manda
+// no WhatsApp do número informado — prova que a pessoa TEM aquele número (saber o telefone de
+// alguém não basta pra entrar como ela). A verificação vale por aparelho (o app memoriza em
+// localStorage). Os códigos vivem só em memória: validade de 5 min — um reinício do servidor
+// apenas obriga a pedir outro código, sem estado órfão no banco.
+const _codigosAcesso = new Map(); // fone -> { codigo, expira, tentativas }
+const _codigosEnvios = new Map(); // fone -> [timestamps de envio] (rate limit por telefone)
+
+app.post('/api/auth/codigo-enviar', async (req, res) => {
+  const fone = normalizarFoneServidor(String((req.body || {}).fone || ''));
+  if (fone.replace(/\D/g, '').length < 10) return res.status(400).json({ ok: false, error: 'Telefone inválido.' });
+  const agora = Date.now();
+  const envios = (_codigosEnvios.get(fone) || []).filter(t => agora - t < 60 * 60 * 1000);
+  if (envios.length >= 3) return res.status(429).json({ ok: false, error: 'Muitos códigos pedidos pra esse número. Aguarde ou peça o código na lotérica.' });
+  envios.push(agora); _codigosEnvios.set(fone, envios);
+  const codigo = String(Math.floor(100000 + Math.random() * 900000));
+  _codigosAcesso.set(fone, { codigo, expira: agora + 5 * 60 * 1000, tentativas: 0 });
+  let enviado = false;
+  if (botSock && botStatus === 'conectado') {
+    try {
+      await botSock.sendMessage(`${fone}@s.whatsapp.net`, { text: `🔑 Seu código de acesso ao app da *Lotérica Taguacenter*: *${codigo}*\n\nEle vale por 5 minutos. Se você não pediu esse código, ignore esta mensagem.` });
+      enviado = true;
+    } catch (e) { console.error('Código de acesso: falha ao enviar via bot —', e.message); }
+  }
+  // Mesmo sem conseguir entregar (bot desconectado/erro), o código fica gerado — o lotérico
+  // consulta pela rota protegida abaixo e passa pessoalmente ao apostador (plano B).
+  res.json({ ok: true, enviado });
+});
+
+app.post('/api/auth/codigo-verificar', (req, res) => {
+  const fone = normalizarFoneServidor(String((req.body || {}).fone || ''));
+  const codigo = String((req.body || {}).codigo || '').trim();
+  const reg = _codigosAcesso.get(fone);
+  // 400 (não 401) de propósito: o helper de fetch do app desloga em 401, e aqui ninguém está logado ainda
+  if (!reg || Date.now() > reg.expira) return res.status(400).json({ ok: false, error: 'Código expirado — toque em Entrar de novo pra receber outro.' });
+  reg.tentativas++;
+  if (reg.tentativas > 5) { _codigosAcesso.delete(fone); return res.status(429).json({ ok: false, error: 'Muitas tentativas — toque em Entrar de novo pra receber outro código.' }); }
+  if (reg.codigo !== codigo) return res.status(400).json({ ok: false, error: 'Código incorreto — confira no seu WhatsApp.' });
+  _codigosAcesso.delete(fone);
+  res.json({ ok: true });
+});
+
+// Plano B do lotérico — POST de propósito (POST sem token cai no middleware JWT; um GET seria
+// público e qualquer um leria o código, anulando a verificação inteira).
+app.post('/api/auth/codigo-atual', (req, res) => {
+  const fone = normalizarFoneServidor(String((req.body || {}).fone || ''));
+  const reg = _codigosAcesso.get(fone);
+  if (!reg || Date.now() > reg.expira) return res.json({ ok: true, codigo: null });
+  res.json({ ok: true, codigo: reg.codigo, expiraEm: new Date(reg.expira).toISOString() });
 });
 
 // ---- BOLÕES ----

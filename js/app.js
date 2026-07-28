@@ -456,12 +456,24 @@ const AUTH = {
   _normNome(nome) { return (nome||'').trim().toLowerCase().replace(/\s+/g,' '); },
   _nomeCompleto(nome) { return (nome||'').trim().split(/\s+/).filter(Boolean).length >= 2; },
 
+  // Telefones já verificados por código do WhatsApp NESTE aparelho — a verificação de posse do
+  // número acontece uma única vez por aparelho, depois o login volta a ser só nome.
+  _fonesVerificados() { try { return JSON.parse(localStorage.getItem('ltr_verificados')||'[]'); } catch { return []; } },
+  _foneVerificado(fone) { return AUTH._fonesVerificados().includes(fone); },
+  _marcarFoneVerificado(fone) {
+    const l = AUTH._fonesVerificados();
+    if (!l.includes(fone)) { l.push(fone); localStorage.setItem('ltr_verificados', JSON.stringify(l)); }
+  },
+  _aguardandoCodigo: null, // telefone aguardando o código de 6 dígitos digitado
+
   // Chamado a cada tecla no campo nome — mostra senha para admin/dev, telefone para cliente
   // (só na primeira vez neste aparelho; da segunda em diante o nome sozinho já basta).
   onNomeInput(v) {
     const nome = v.trim();
     const low = nome.toLowerCase();
     const isPriv = (low === 'admin' || low === 'dev');
+    // Mexeu no nome no meio da verificação → cancela o passo do código (o telefone pode mudar)
+    if (AUTH._aguardandoCodigo) { AUTH._aguardandoCodigo = null; const fc=$('field-codigo'); if (fc) fc.hidden = true; }
     $('field-senha').hidden = !isPriv;
     const sub = $('login-sub');
     if (isPriv) {
@@ -539,6 +551,45 @@ const AUTH = {
       }
       fone = normalizarFoneDDI(ddi, digitado);
     }
+
+    // Verificação de posse do número — só no PRIMEIRO acesso deste telefone neste aparelho.
+    // O bot manda um código de 6 dígitos no WhatsApp do número informado; saber o telefone de
+    // alguém não basta pra entrar como ela (e erro de digitação é pego na hora: código não chega).
+    if (!AUTH._foneVerificado(fone)) {
+      const hint = $('codigo-hint');
+      if (AUTH._aguardandoCodigo !== fone) {
+        err.hidden=false; err.style.color='#aaa'; err.textContent='⏳ Enviando código pro seu WhatsApp...';
+        const r = await _api.post('/api/auth/codigo-enviar', { fone });
+        const d = r ? await r.json().catch(()=>null) : null;
+        err.style.color='';
+        if (!d?.ok) { err.textContent = d?.error || 'Não deu pra enviar o código agora — tente de novo em instantes.'; return; }
+        AUTH._aguardandoCodigo = fone;
+        $('field-codigo').hidden = false;
+        if (hint) hint.textContent = d.enviado
+          ? `Enviamos um código de 6 dígitos no WhatsApp do número informado. Digite-o acima e toque em Entrar.`
+          : `Não conseguimos enviar pelo WhatsApp agora — peça o código na lotérica e digite acima.`;
+        err.hidden = true;
+        $('inp-codigo')?.focus();
+        return; // aguarda a pessoa digitar o código e tocar em Entrar de novo
+      }
+      const codigo = ($('inp-codigo')?.value || '').replace(/\D/g,'');
+      if (codigo.length !== 6) { err.hidden=false; err.textContent='Digite o código de 6 dígitos que chegou no seu WhatsApp.'; $('inp-codigo')?.focus(); return; }
+      err.hidden=false; err.style.color='#aaa'; err.textContent='⏳ Conferindo o código...';
+      const rv = await _api.post('/api/auth/codigo-verificar', { fone, codigo });
+      const dv = rv ? await rv.json().catch(()=>null) : null;
+      err.style.color='';
+      if (!dv?.ok) {
+        err.textContent = dv?.error || 'Falha ao conferir o código — tente de novo.';
+        // Código expirado/queimado: volta pro passo de envio pra gerar outro no próximo Entrar
+        if ((dv?.error||'').includes('novo')) { AUTH._aguardandoCodigo = null; $('field-codigo').hidden = true; if ($('inp-codigo')) $('inp-codigo').value=''; }
+        return;
+      }
+      AUTH._marcarFoneVerificado(fone);
+      AUTH._aguardandoCodigo = null;
+      $('field-codigo').hidden = true;
+      err.hidden = true;
+    }
+
     AUTH._lembrarApostador(nome, fone);
     _api.post('/api/usuarios/registrar', { id:'ap_'+fone, nome, criado:hoje(), fone });
     S.user = { role:'cliente', nome, fone };
@@ -2150,7 +2201,10 @@ const R = {
     $('view-usuarios').innerHTML=`
       <div class="fxb mb12">
         <div class="sectt">Apostadores (${todos.length})</div>
-        <button class="btn btn-p btn-sm" onclick="R._mNovoUser()">+ Adicionar</button>
+        <div class="fx" style="gap:6px">
+          <button class="btn btn-o btn-sm" title="Ver código de acesso de um apostador" onclick="R._mCodigoAcesso()">🔑 Código</button>
+          <button class="btn btn-p btn-sm" onclick="R._mNovoUser()">+ Adicionar</button>
+        </div>
       </div>
 
       <div class="fxb mb8">
@@ -2208,6 +2262,29 @@ const R = {
     navigator.clipboard.writeText(fones.join(', '))
       .then(()=>TOAST.show(`📋 ${fones.length} telefone${fones.length>1?'s':''} copiado${fones.length>1?'s':''}!`, 'ok'))
       .catch(()=>TOAST.show('Não deu pra copiar — copie manualmente.', 'err'));
+  },
+
+  // Plano B da verificação por código: quando o apostador não recebeu o código no WhatsApp
+  // (bot fora do ar, WhatsApp da pessoa com problema), o lotérico consulta o código atual do
+  // telefone e passa pessoalmente. Rota protegida por token — só admin/dev enxerga.
+  _mCodigoAcesso() {
+    MODAL.open(`<div class="m-title">🔑 Código de acesso</div>
+      <p class="txs muted mb8">Se o apostador não recebeu o código no WhatsApp ao entrar no app, digite o telefone dele pra ver o código atual e informar pessoalmente.</p>
+      <div class="fg"><label>Telefone do apostador</label><div class="fone-row">${ddiSelect('ca-ddi')}<input id="ca-fone" type="tel" placeholder="(61) 99999-9999"></div></div>
+      <button class="btn btn-p btn-f" onclick="R._verCodigoAcesso()">Consultar</button>
+      <div id="ca-res" class="tc mt8"></div>`);
+  },
+  async _verCodigoAcesso() {
+    const fone = normalizarFoneDDI($('ca-ddi')?.value, $('ca-fone')?.value || '');
+    const el = $('ca-res'); if (!el) return;
+    el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    const r = await _api.post('/api/auth/codigo-atual', { fone });
+    const d = r ? await r.json().catch(()=>null) : null;
+    if (!d?.ok) { el.innerHTML = '<span class="erro">Erro ao consultar — tente de novo.</span>'; return; }
+    el.innerHTML = d.codigo
+      ? `<div style="font-size:1.6rem;font-weight:700;letter-spacing:4px">${d.codigo}</div>
+         <div class="txs muted mt4">vale até ${new Date(d.expiraEm).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</div>`
+      : '<span class="txs muted">Nenhum código ativo pra esse número — peça pro apostador tocar em "Entrar" no app (isso gera um código novo) e consulte de novo.</span>';
   },
 
   _mNovoUser() {

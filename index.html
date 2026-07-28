@@ -51,6 +51,13 @@
              onkeydown="if(event.key==='Enter')AUTH.entrar()">
     </div>
 
+    <div class="field" id="field-codigo" hidden>
+      <label>Código de verificação</label>
+      <input id="inp-codigo" type="tel" inputmode="numeric" maxlength="6" placeholder="6 dígitos" autocomplete="one-time-code"
+             onkeydown="if(event.key==='Enter')AUTH.entrar()">
+      <p class="txs muted" id="codigo-hint" style="margin-top:6px"></p>
+    </div>
+
     <button class="btn btn-p btn-f" id="btn-entrar" onclick="AUTH.entrar()" disabled>Entrar</button>
     <p id="login-err" class="erro" hidden></p>
   </div>
