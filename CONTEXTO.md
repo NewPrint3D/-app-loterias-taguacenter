@@ -4,10 +4,11 @@ App de gestão de bolões para lotérica física (Taguacenter, Brasília).
 Frontend client-side + backend Node.js (Express) no Render + banco Neon PostgreSQL.
 Dados persistidos no Neon via API REST — sincroniza entre dispositivos/países.
 Sempre responder e escrever código em **português** (variáveis, funções, strings de UI, comentários).
-**Estado em: 27/07/2026** (Neon estourou a cota gratuita → plano Launch + crons otimizados pra só
-consultar o banco quando há trabalho pendente; Home única pra todos os perfis + telefones com
-seletor de DDI publicados; bot WhatsApp conectado — sessão sobrevive a deploys; Modo Manutenção
-LIGADO, só sai com autorização explícita do Wesley — tudo em produção)
+**Estado em: 29/07/2026** (preparação pra entrega ao lotérico: verificação por código no WhatsApp
+no 1º login do apostador, Bolão Anual identificado por telefone com nome capturado sozinho no
+login, editar/excluir em todos os cadastros, admin vincula grupos ao bot, planilha sem barra
+horizontal; bot reconectado por QR com sessão nova; Modo Manutenção LIGADO, só sai com
+autorização explícita do Wesley — tudo em produção)
 
 ## Como rodar localmente
 
@@ -602,6 +603,51 @@ só tocam o banco quando existe trabalho pendente de verdade.
 - **Deploy validado em produção**: health OK e o bot **reconectou sozinho** em ~60s (a sessão do
   Baileys na tabela `wpp_auth` sobrevive a deploys — não precisa de QR novo).
 
+## Sessão 28-29/07/2026 — preparação pra entrega ao lotérico (teste guiado ponta a ponta)
+
+Todas as mudanças em produção; commits `c7ef10c`→`779931d`:
+
+- **Selects legíveis** (`c7ef10c`): regra global `select option { background:#fff; color:#000 }`
+  (dropdown nativo abria branco com letra branca); `.fg select option` e `.ddi-sel option` ganharam
+  `color: var(--text)` explícito pra continuarem escuros e legíveis.
+- **Editar/excluir em TODOS os cadastros pro admin e dev** (`36f5a5c`): ✏️ em bolão, membro de
+  bolão (que também ganhou ✕ remover), Banco de Clientes, Premiação, Bolão Anual, participante do
+  anual e lote do Cotas ao Vivo. Backend: POST de premiacoes/boloes-parcelados/participantes
+  viraram upsert `ON CONFLICT(id) DO UPDATE` (preservando confirmada/quitado/criado); rota nova
+  protegida `PUT /api/lotes/:id` (nome/concurso/valor/duracao_min — total de cotas NÃO é editável
+  de propósito: cotas já existem; excluir/recriar é o caminho).
+- **Admin vincula grupos ao bot** (`8782aa4`): seção "🔗 Vincular grupos ao bot" na tela WhatsApp
+  do admin (`BOT.renderVinculacoes()` compartilhada com o Controle Dev). Conectar/desconectar/QR
+  continuam SÓ no dev — o lotérico administra grupos sozinho sem risco de derrubar o bot.
+- **Importação manual via bot removida** (`221142f`): vincular o grupo já importa tudo sozinho
+  (`grupo_membros`); contagem do card de grupo prioriza o cadastro real; "Nº de membros" virou
+  estimativa opcional; **fix**: editar grupo não apaga mais o `jid` do vínculo (bug silencioso).
+- **Bolão Anual por TELEFONE** (`67b7729`): "Importar do grupo" lista todo participante com
+  telefone válido (mesmo sem nome); "+ Participante" exige só telefone; planilha mostra
+  "📱 fone (aguardando cadastro)" (planilha compartilhada mascara: •••+4 dígitos); no 1º login do
+  apostador, `/api/usuarios/registrar` preenche o nome automaticamente casando pelo telefone —
+  no bolão anual E no `grupo_membros`. A planilha se completa sozinha conforme o pessoal entra.
+- **Planilha sem barra de rolagem** (`87f93b3`): comprime pra caber inteira
+  (`table-layout:fixed`); cabeçalho dos meses fixo no scroll vertical (`763934c`,
+  `border-collapse:separate` — sticky+collapse buga borda).
+- **Verificação de posse do número — código via WhatsApp no 1º login por aparelho**
+  (`763934c`/`9d3597f`/`1b6065a`/`779931d`): rotas públicas `POST /api/auth/codigo-enviar`
+  (rate limit 3/h por fone; código 6 dígitos, 5 min; checagem `onWhatsApp` fail-open — só avisa
+  "sem WhatsApp" quando a consulta respondeu e não achou) e `POST /api/auth/codigo-verificar`
+  (400 pra código errado — não 401, que deslogaria; máx 5 tentativas). Aparelho verificado fica
+  em `localStorage['ltr_verificados']`. Campo de telefone fica VISÍVEL e pré-preenchido no login
+  enquanto o número memorizado não foi verificado (a pessoa vê pra onde o código vai e corrige).
+  **Plano B**: `POST /api/auth/codigo-atual` (protegida) GERA código se não houver ativo —
+  funciona mesmo sob rate limit; botão "🔑 Código" no Banco de Clientes. Validado ponta a ponta
+  com número real (+34, código entregue pelo bot).
+- **Nomenclatura**: pro admin/dev a tela é "Banco de Clientes" (menu Config., título, Conta);
+  seção interna "📱 Com acesso ao app"; pro apostador continua "apostador". Card "Apostadores"
+  do dashboard mantido (conta apostadores de bolões/grupos, outra métrica).
+- **Lições do bot**: deploys em sequência derrubam a sessão Baileys (diagnóstico começa por
+  `GET /api/wpp/status`); NUNCA resetar/mexer na conexão enquanto alguém está escaneando o QR
+  (o pareamento em andamento é invalidado); pareamento falhando "na segunda leitura" = conexões
+  concorrentes competindo pelo QR.
+
 ## REGRA DE TRABALHO estabelecida pelo usuário (19/07/2026)
 
 Ao receber um pedido: **examinar o código primeiro e AVISAR antes de mudar** — dizer se já está
@@ -736,7 +782,9 @@ Render atualiza frontend + backend automaticamente em ~1-3 min.
 2. **Tirar do Modo Manutenção** — SÓ com autorização explícita do Wesley (regra registrada)
 3. **Monitorar consumo do Neon** (console.neon.tech → Usage) por 2-4 semanas; se ficar bem abaixo
    de 100h/mês, avaliar voltar ao plano gratuito
-4. **Trocar as senhas de admin e dev** — ficaram expostas no histórico público do GitHub em 19/07
+4. **Trocar as senhas de admin e dev + JWT_SECRET** — expostas no histórico público do GitHub em
+   19/07; guia passo a passo pronto em `Downloads\seguranca-render-app-loterias.pdf` (gerar hashes
+   bcryptjs + env vars `ADMIN_SENHA_HASH`/`DEV_SENHA_HASH`/`JWT_SECRET` no Render)
 5. **Chip brasileiro** — ao voltar ao Brasil: desconectar bot, novo chip, reconectar via QR
 6. **Credenciamento Caixa (SISGEL)** — acesso a notificações de venda em tempo real, tipo ConectaLot
 7. **Push notifications PWA** — pro admin, quando integração Caixa for aprovada
